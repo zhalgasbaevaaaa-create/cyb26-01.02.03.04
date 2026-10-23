@@ -3,13 +3,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { CONFIG } from "../config.js";
-import type { EvaluationRecord, RubricVersion } from "@gha/shared";
-import { DEFAULT_RUBRIC } from "@gha/shared";
+import type { EvaluationRecord, RubricVersion, ModuleSettings } from "@gha/shared";
+import { DEFAULT_RUBRIC, DEFAULT_MODULE_SETTINGS } from "@gha/shared";
 
 interface DbShape {
   evaluations: EvaluationRecord[];
   rubrics: RubricVersion[];
   activeRubricVersion: string;
+  moduleSettings?: ModuleSettings;
 }
 
 const dbPath = () => path.join(CONFIG.dataDir, "db.json");
@@ -23,7 +24,14 @@ async function ensureFile(): Promise<void> {
   try {
     await fs.access(dbPath());
   } catch {
-    await fs.writeFile(dbPath(), JSON.stringify({ evaluations: [], rubrics: [DEFAULT_RUBRIC], activeRubricVersion: DEFAULT_RUBRIC.version } satisfies DbShape, null, 2));
+    await fs.writeFile(
+      dbPath(),
+      JSON.stringify(
+        { evaluations: [], rubrics: [DEFAULT_RUBRIC], activeRubricVersion: DEFAULT_RUBRIC.version, moduleSettings: DEFAULT_MODULE_SETTINGS } satisfies DbShape,
+        null,
+        2,
+      ),
+    );
   }
 }
 
@@ -33,8 +41,10 @@ export async function readDb(): Promise<DbShape> {
   const raw = await fs.readFile(dbPath(), "utf-8");
   cache = JSON.parse(raw) as DbShape;
   if (!cache.rubrics?.length) cache.rubrics = [DEFAULT_RUBRIC];
+  if (!cache.moduleSettings) cache.moduleSettings = DEFAULT_MODULE_SETTINGS;
   return cache;
 }
+
 
 async function writeDb(db: DbShape): Promise<void> {
   const tmp = dbPath() + ".tmp";
@@ -103,4 +113,17 @@ export async function saveRubric(rubric: RubricVersion): Promise<void> {
 export async function listRubrics(): Promise<RubricVersion[]> {
   const db = await readDb();
   return [...db.rubrics].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export async function getModuleSettings(): Promise<ModuleSettings> {
+  const db = await readDb();
+  return db.moduleSettings ?? DEFAULT_MODULE_SETTINGS;
+}
+
+export async function saveModuleSettings(settings: ModuleSettings): Promise<void> {
+  await enqueue(async () => {
+    const db = await readDb();
+    db.moduleSettings = settings;
+    await writeDb({ ...db });
+  });
 }

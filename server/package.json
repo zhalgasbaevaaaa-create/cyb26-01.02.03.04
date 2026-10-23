@@ -8,6 +8,7 @@
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@gha/shared": "*",
     "cors": "^2.8.5",
     "dotenv": "^18.0.8",

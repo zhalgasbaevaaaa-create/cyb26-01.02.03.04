@@ -41,15 +41,16 @@ export interface Requirement {
 }
 
 export type CriterionKey =
-  | "compliance"      // 1. Тапсырмаға сәйкестік және толықтық — 20
-  | "mechanics"       // 2. Негізгі механика және кезеңдер — 15
-  | "history_tasks"   // 3. Тарихи тапсырмалар және форматтар — 15
-  | "auth_profile"    // 4. Аутентификация, профиль, сақталған нәтиже — 15
-  | "gamehub"         // 5. GAME HUB және рейтинг — 10
-  | "backend_security"// 6. Backend және қауіпсіздік — 10
-  | "ui_responsive"   // 7. UI және адаптивтілік — 5
-  | "history_accuracy"// 8. Тарихи контент дәлдігі — 5
-  | "code_quality";   // 9. Код сапасы, тестілеу, презентация — 5
+  | "mandatory_system"  // 1. Барлық міндетті жүйелік талаптар (Google OAuth, профиль, сессия) — 15
+  | "history_tasks"     // 2. Алты тарихи тапсырма түрі (+ тарихи дәлдік) — 15
+  | "levels_difficulty" // 3. 10 деңгей және difficulty progression — 10
+  | "life_mechanic"     // 4. «Жан біткенде» білім беру механикасы — 10
+  | "gamehub"           // 5. GAME HUB порталы және рейтинг — 10
+  | "gameplay"          // 6. Ойын механикасы және алгоритмі — 10
+  | "backend_data"      // 7. Backend, дерекқор, деректердің сақталуы — 10
+  | "cybersecurity"     // 8. Киберқауіпсіздік — 10
+  | "ui_responsive"     // 9. UI/UX, адаптивтілік, қолжетімділік — 5
+  | "code_quality";     // 10. Код сапасы, тестілеу, аяқталғандық — 5
 
 export interface CriterionScore {
   key: CriterionKey;
@@ -104,6 +105,17 @@ export interface JobStage {
   status: "pending" | "running" | "done" | "skipped" | "error";
 }
 
+/** Тексеру режимі: тек URL (black-box) немесе URL+GitHub (black-box + white-box). */
+export type AuditMode = "URL_ONLY" | "URL_GITHUB";
+
+export type FindingSeverity = "critical" | "major" | "minor";
+
+/** Critical-fail шарты: ұпайды нөлдемейді, бірақ ерекшеескерту ретінде көрсетіледі. */
+export interface CriticalFailure {
+  key: string;
+  message: string;                 // Қазақша түсініктеме
+}
+
 export interface EvaluationRecord {
   id: string;
   studentName: string;
@@ -118,6 +130,7 @@ export interface EvaluationRecord {
   stages: JobStage[];
   progress: number;                // 0..100 — нақты кезеңдерден есептеледі
   rubricVersion: string;
+  mode: AuditMode;                 // MODE A (тек URL) / MODE B (URL + GitHub)
   tests: TestResult[];
   criteria: CriterionScore[];
   totalScore: number;              // Расталған ұпай (тексерілген бөлік)
@@ -128,8 +141,10 @@ export interface EvaluationRecord {
   historicalNotes: string[];
   topImprovements: string[];
   limitations: string[];
+  criticalFailures: CriticalFailure[]; // Critical Fail шарттары (ұпайды нөлдемейді)
   reportRefs: { pdf?: string; csv?: string };
   retestOf?: string;               // Қайта тексеру болса — алдыңғы жазба id
+  previousScore?: number;          // Қайта тексеру болса — алдыңғы provisionalScore
   cancelRequested?: boolean;
 }
 
@@ -139,12 +154,19 @@ export interface RubricCriterionDef {
   maxPoints: number;
 }
 
+/** Қорытынды баға деңгейі («FINAL DECISION», master prompt §13), мысалы 90–100 → «Өте жоғары деңгей». */
+export interface GradingBand {
+  min: number;    // Осы ұпайдан (қоса алғанда) бастап осы жапсырма қолданылады
+  label: string;  // Қазақша деңгей атауы
+}
+
 export interface RubricVersion {
   version: string;
   createdAt: string;
   criteria: RubricCriterionDef[];
   passThreshold: number;           // "Өтті" шегі
   provisionalThreshold: number;    // Расталған баға үшін қажетті тексеру жабылымы
+  gradingBands?: GradingBand[];    // Қорытынды баға деңгейлері (бос болса — әдепкі DEFAULT_GRADING_BANDS қолданылады)
 }
 
 export interface AuditRequest {

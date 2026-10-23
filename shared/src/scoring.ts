@@ -18,6 +18,7 @@
 
 import type {
   CriterionScore,
+  CriticalFailure,
   EvaluationRecord,
   Requirement,
   RubricVersion,
@@ -171,6 +172,53 @@ export function scoreEvaluation(
     limitations: [...new Set(limitations)],
     scoreType: coverage >= rubric.provisionalThreshold ? "confirmed" : "provisional",
   };
+}
+
+/**
+ * Critical Fail шарттары (master prompt §28).
+ * ЕСКЕРТУ: бұл ұпайды нөлдемейді — тек ерекше ескерту ретінде көрсетіледі,
+ * рубрика бойынша есептелген ұпай өзгеріссіз қалады.
+ */
+export function computeCriticalFailures(tests: TestResult[], assignmentId: string): CriticalFailure[] {
+  const found: CriticalFailure[] = [];
+  const st = (id: string) => requirementStatus(id, tests);
+  const levelsReqByAssignment: Record<string, string> = {
+    A1: "A1-LEVELS", A2: "A2-LEVELS", A3: "A3-ARENAS", A4: "A4-TRACKS", A5: "A5-LEVELS", A6: "A6-ROOMS",
+  };
+
+  if (st("C-GOOGLE") === "FAIL") {
+    found.push({ key: "no_google_auth", message: "Google арқылы кіру мүлде жоқ (міндетті ортақ талап)." });
+  }
+  if (st("C-PERSIST") === "FAIL" && st("C-GOOGLE-DATA") !== "PASS") {
+    found.push({ key: "no_persistence", message: "Нәтиженің сақталу дәлелі табылмады (result persistence жоқ)." });
+  }
+  if (st("C-BACKEND") === "FAIL") {
+    found.push({ key: "no_backend", message: "Backend (Firebase/Supabase/API) қолданылуының дәлелі табылмады." });
+  }
+  if (st("C-HUB-MAIN") === "FAIL" && st("C-HUB-PAGES") === "FAIL") {
+    found.push({ key: "no_gamehub", message: "GAME HUB порталының дәлелі мүлде табылмады." });
+  }
+  const taskTypeFails = ["C-TASK-1", "C-TASK-2", "C-TASK-3", "C-TASK-4", "C-TASK-5", "C-TASK-6"].filter((id) => st(id) === "FAIL").length;
+  if (taskTypeFails >= 3) {
+    found.push({ key: "missing_task_types", message: `6 міндетті тарихи тапсырма түрінің ${taskTypeFails} түрі мүлде табылмады.` });
+  }
+  const levelsReq = levelsReqByAssignment[assignmentId];
+  if (levelsReq && st(levelsReq) === "FAIL") {
+    found.push({ key: "missing_levels", message: "10 деңгей/кезең жүйесінің дәлелі табылмады." });
+  }
+  if (st("C-LIVES") === "FAIL") {
+    found.push({ key: "missing_life_mechanic", message: "«Жан біткенде» білім беру механикасының дәлелі мүлде табылмады (барлық 6 ойынға міндетті)." });
+  }
+  if (st("C-SEC-XSS") === "FAIL") {
+    found.push({ key: "critical_xss", message: "XSS осалдығы расталды — енгізілген скрипт бетте орындалды." });
+  }
+  if (st("C-SEC-CLIENT") === "FAIL" || st("C-SEC-REPO") === "FAIL") {
+    found.push({ key: "exposed_secret", message: "Клиенттік кодта немесе GitHub репозиторийінде құпия кілт/токен табылды." });
+  }
+  if (st("C-SEC-ANTICHEAT") === "FAIL") {
+    found.push({ key: "leaderboard_manipulation", message: "Ұпай/рейтинг серверлік валидациясыз, тек клиентте (localStorage) сақталатыны байқалды — манипуляцияға осал." });
+  }
+  return found;
 }
 
 function recommendationFor(reqs: Requirement[], id: string): string {

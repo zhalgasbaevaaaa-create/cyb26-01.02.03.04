@@ -6,34 +6,49 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { CONFIG } from "../config.js";
 import { isRequestHostAllowed, validateUrl } from "@gha/shared/src/urlSecurity.js";
-import type { EvaluationRecord, JobStage, Requirement, TestResult, TestStatus } from "@gha/shared";
+import type { EvaluationRecord, JobStage, Requirement, TestResult, TestStatus, ModuleSettings, TestModuleKey } from "@gha/shared";
+import { DEFAULT_MODULE_SETTINGS } from "@gha/shared";
 import { PROFILES, TASK_TYPE_KEYWORDS, LIVES_KEYWORDS, HUB_KEYWORDS, GOOGLE_LOGIN_KEYWORDS } from "./profiles.js";
 import { loadAnswerKey, compareAgainstKey } from "./answerKey.js";
+import { AxeBuilder } from "@axe-core/playwright";
 
+// Master prompt §4-дегі 15 кезеңді pipeline. 1–12 кезеңін осы executor жүргізеді;
+// 13–15 («Requirements сәйкестігі», «Бағалау», «Қорытынды есеп») — runner.ts-та,
+// браузер жабылғаннан кейін (ұпай есептеу/есеп шығару браузерді қажет етпейді).
 export const STAGE_KEYS = [
   "validate",
   "load",
+  "browser",
   "ui",
   "mechanics",
   "history",
+  "levels",
   "auth",
-  "responsive",
+  "backend",
+  "gamehub",
   "security",
   "repo",
+  "requirements",
   "scoring",
+  "report",
 ] as const;
 
 export const STAGE_LABELS: Record<string, string> = {
-  validate: "Сілтемені тексеру және қауіпсіздік сүзгісі",
-  load: "Сайтты жүктеу және қолжетімділікті тексеру",
-  ui: "Интерфейс пен навигацияны тексеру",
-  mechanics: "Ойын механикасын тексеру (тапсырма профилі)",
-  history: "Тарихи тапсырмаларды тексеру",
-  auth: "Аутентификация мен сақталған нәтижелерді тексеру",
-  responsive: "Адаптивті дизайнды тексеру",
-  security: "Қауіпсіздікті тексеру",
-  repo: "Репозиторийді статикалық талдау",
-  scoring: "Ұпайды есептеу және есеп дайындау",
+  validate: "1. URL қауіпсіздігін тексеру (SSRF сүзгісі)",
+  load: "2. Сайтқа қосылу",
+  browser: "3. Браузерлік тест (консоль, желі бақылауы)",
+  ui: "4. Интерфейсті және навигацияны тексеру",
+  mechanics: "5. Ойын механикасын тексеру",
+  history: "6. 6 тарихи тапсырманы тексеру",
+  levels: "7. 10 деңгей жүйесін тексеру",
+  auth: "8. Google авторизациясын тексеру",
+  backend: "9. Backend және деректердің сақталуын тексеру",
+  gamehub: "10. GAME HUB порталы мен Leaderboard тексеру",
+  security: "11. Security аудиті",
+  repo: "12. Source-code аудиті (GitHub берілсе)",
+  requirements: "13. Requirements сәйкестігі",
+  scoring: "14. Бағалау",
+  report: "15. Қорытынды есеп",
 };
 
 export function makeStages(): JobStage[] {
@@ -60,6 +75,7 @@ interface Ctx {
   profileKey: string;
   pageText: string;
   screenshotCount: number;
+  networkLog: { url: string; method: string }[];
 }
 
 const SECRET_PATTERNS: { re: RegExp; label: string }[] = [
@@ -146,6 +162,7 @@ export async function runBrowserTests(
   assignmentId: string,
   requirements: Requirement[],
   onStage: (key: string, status: JobStage["status"]) => Promise<void>,
+  moduleSettings: ModuleSettings = DEFAULT_MODULE_SETTINGS,
 ): Promise<ExecutorResult> {
   const assignment = { A1: "action_arcade_survival", A2: "strategy_tower_defense", A3: "shooter_quiz", A4: "racing_quiz", A5: "match3_puzzle_rpg", A6: "adventure_escape" }[assignmentId] ?? "action_arcade_survival";
   const res: ExecutorResult = {
@@ -159,9 +176,23 @@ export async function runBrowserTests(
     detectedText: "",
     loadFailed: false,
   };
-  const ctx: Ctx = { res, rec, profileKey: assignment, pageText: "", screenshotCount: 0 };
+  const ctx: Ctx = { res, rec, profileKey: assignment, pageText: "", screenshotCount: 0, networkLog: [] };
   const profile = PROFILES[assignment];
   const opts = { allowLocalhostForTests: CONFIG.allowLocalhostForTests };
+
+  // Әкімші бұл тест модулін өшірген бе? Өшірілсе — тиісті талаптарға еш тест
+  // жазылмайды, сондықтан олар автоматты түрде «Тексерілмеді» күйінде қалады
+  // (ұпайға әсер етпейді, бірақ бағада да ЖОҚ деп саналмайды — honest NOT_VERIFIED).
+  const isModuleEnabled = (key: TestModuleKey): boolean => moduleSettings.enabledModules[key] !== false;
+  const skipModule = async (key: TestModuleKey, label: string): Promise<void> => {
+    const t = newTest(`EVIDENCE-MODULE-${key.toUpperCase()}`, `${label} — модуль өшірілген`);
+    finish(t, "NOT_VERIFIED", "Бұл тест модулі әкімші параметрлерінде (Жүйе параметрлері → Тест модульдері) өшірілген.", {
+      limitations: "Модуль өшірілгендіктен, бұған қатысты барлық талаптар «Тексерілмеді» күйінде қалады және ұпайға әсер етпейді.",
+    });
+    ctx.res.tests.push(t);
+    ctx.res.limitations.push(`«${label}» тест модулі әкімші параметрлерінде өшірілген — тиісті талаптар тексерілмеді.`);
+    await onStage(key, "skipped");
+  };
 
   let browser: Browser | null = null;
   let context: BrowserContext | null = null;
@@ -171,7 +202,10 @@ export async function runBrowserTests(
     // ===== 1. VALIDATE =====
     await onStage("validate", "running");
     const check = await validateUrl(rec.projectUrl, opts);
-    const tVal = newTest("C-SEC-AUTH", "Сілтеменің жарамдылығы мен SSRF сүзгісі");
+    // ЕСКЕРТУ: бұл — аудитордың өз қорғаныс қақпасы (SSRF сүзгісі), студент жобасының
+    // қауіпсіздік көрсеткіші ЕМЕС, сондықтан ешбір бағалау критерийіне есептелмейді
+    // (requirementId "GATE-..." — REQUIREMENTS тізімінде жоқ, demek ұпайға әсер етпейді).
+    const tVal = newTest("GATE-SSRF", "Сілтеменің жарамдылығы мен SSRF сүзгісі (аудитордың өз қорғанысы)");
     tVal.actions.push(`URL тексерілді: ${rec.projectUrl}`);
     tVal.expected = "Сілтеме http/https және жеке/ішкі мекенжай емес";
     if (!check.ok) {
@@ -186,14 +220,15 @@ export async function runBrowserTests(
     await onStage("validate", "done");
     if (rec.cancelRequested) return res;
 
-    // ===== Браузерді іске қосу =====
+    // ===== 3. БРАУЗЕРЛІК ТЕСТ: Браузерді іске қосу =====
+    await onStage("browser", "running");
     browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });
     context = await browser.newContext({
       viewport: { width: 1366, height: 768 },
       userAgent: "GameHubAuditor/1.0 (университеттік автоматты тексеру)",
       locale: "kk-KZ",
     });
-    context.setDefaultTimeout(CONFIG.pageActionTimeoutMs);
+    context.setDefaultTimeout(moduleSettings.timeouts.pageActionTimeoutMs || CONFIG.pageActionTimeoutMs);
 
     let requestCount = 0;
     await context.route("**/*", async (route) => {
@@ -214,6 +249,7 @@ export async function runBrowserTests(
         await route.abort();
         return;
       }
+      ctx.networkLog.push({ url: route.request().url(), method: route.request().method() });
       await route.continue();
     });
 
@@ -223,8 +259,10 @@ export async function runBrowserTests(
     });
     page.on("pageerror", (err) => res.consoleErrors.push(String(err.message).slice(0, 300)));
     page.on("requestfailed", (req) => res.failedRequests.push(`${req.url().slice(0, 200)} (${req.failure()?.errorText ?? "белгісіз"})`));
+    await onStage("browser", "done");
+    if (rec.cancelRequested) return res;
 
-    // ===== 2. LOAD =====
+    // ===== 2(жалғасы). LOAD: Сайтқа қосылу =====
     await onStage("load", "running");
     const tLoad = newTest("C-HUB-MAIN", "Сайттың қолжетімділігі мен жүктелуі");
     tLoad.browser = "Chromium (headless)";
@@ -232,7 +270,7 @@ export async function runBrowserTests(
     tLoad.actions.push(`goto(${check.finalUrl})`);
     tLoad.expected = "Сайт ашылады, HTTP 2xx/3xx жауабы, мазмұн көрінеді";
     try {
-      const resp = await page.goto(check.finalUrl!, { waitUntil: "domcontentloaded", timeout: CONFIG.navTimeoutMs });
+      const resp = await page.goto(check.finalUrl!, { waitUntil: "domcontentloaded", timeout: moduleSettings.timeouts.navTimeoutMs || CONFIG.navTimeoutMs });
       res.httpStatus = resp?.status();
       res.finalUrl = page.url();
       const redirects = resp ? resp.request().redirectedFrom() !== null : false;
@@ -261,23 +299,34 @@ export async function runBrowserTests(
     res.tests.push(tLoad);
     await onStage("load", tLoad.status === "FAIL" && res.loadFailed ? "error" : "done");
     if (res.loadFailed || !page) {
-      // Сайт ашылмаса, браузерлік кезеңдер орындалмайды — бәрі BLOCKED
-      for (const key of ["ui", "mechanics", "history", "auth", "responsive", "security"]) {
+      // Сайт ашылмаса, браузерлік кезеңдер орындалмайды — бәрі BLOCKED.
+      // Репозиторий талдауы (12-кезең) браузерді қажет етпейді — ол бәрібір орындалады.
+      for (const key of ["ui", "mechanics", "history", "levels", "auth", "backend", "gamehub", "security"]) {
         const t = newTest("C-HUB-MAIN", `${STAGE_LABELS[key]} — сайт қолжетімсіз`);
         finish(t, "BLOCKED", "Сайт жүктелмеді — кезең орындалмады", { limitations: "Негізгі бет ашылмағандықтан тексеру мүмкін болмады." });
         res.tests.push(t);
         await onStage(key, "skipped");
       }
+      if (isModuleEnabled("repo")) {
+        await onStage("repo", "running");
+        await checkRepo(ctx);
+        await onStage("repo", "done");
+      } else {
+        await skipModule("repo", STAGE_LABELS.repo);
+      }
       return res;
     }
     if (rec.cancelRequested) return res;
 
-    // ===== 3. UI =====
+    // ===== 4. UI =====
     await onStage("ui", "running");
     const buttons = await page.locator("button:visible, [role='button']:visible, a.btn:visible").count();
     const links = await page.locator("a[href]:visible").count();
     const inputs = await page.locator("input:visible, textarea:visible, select:visible").count();
-    const tUi = newTest("C-HUB-PAGES", "Интерфейс элементтері мен навигация");
+    // ЕСКЕРТУ: бұл жалпы интерфейс/навигация дәлелі — белгілі бір PDF талабына тікелей
+    // сәйкес келмейді (requirementId "EVIDENCE-..." — REQUIREMENTS тізімінде жоқ,
+    // сондықтан ешбір критерийге ұпай ретінде есептелмейді, тек дәлел ретінде сақталады).
+    const tUi = newTest("EVIDENCE-UI-NAV", "Интерфейс элементтері мен навигация (жалпы дәлел)");
     tUi.actions.push(`Көрінетін батырмалар: ${buttons}; сілтемелер: ${links}; енгізу өрістері: ${inputs}`);
     tUi.expected = "Пайдаланушы басқаратын элементтер бар және навигация жұмыс істейді";
     // Навигацияны сынау: көрінетін ішкі сілтемелердің біреуін басып, қайту
@@ -337,74 +386,118 @@ export async function runBrowserTests(
     res.tests.push(tStart);
     ctx.pageText = await safeInnerText(page);
     res.detectedText = ctx.pageText;
+    // Адаптивтілік (responsive) және негізгі қолжетімділік (accessibility) тексерулері
+    // де осы «Интерфейсті тексеру» кезеңіне жатады (15 кезеңнің тізімінде жеке баптары жоқ).
+    // ЕСКЕРТУ: «ui» модулі өшірілсе — тек осы екі қосымша тексеру аталады; негізгі
+    // навигация/мәтін жинау әрқашан орындалады, себебі келесі кезеңдер ctx.pageText-ке тәуелді.
+    if (isModuleEnabled("ui")) {
+      await checkResponsive(page, context, ctx);
+      await checkAccessibility(page, ctx);
+    } else {
+      ctx.res.limitations.push(`«${STAGE_LABELS.ui}» модулінің қосымша тексерулері (адаптивтілік, accessibility) әкімші параметрлерінде өшірілген.`);
+    }
     await onStage("ui", "done");
     if (rec.cancelRequested) return res;
 
-    // ===== 4. MECHANICS (профиль бойынша) =====
-    await onStage("mechanics", "running");
-    await checkCharacters(page, ctx, profile, assignmentId);
-    await checkLevels(page, ctx, profile, assignmentId);
-    await checkCoreMechanics(page, ctx, profile, assignmentId);
-    await onStage("mechanics", "done");
-    if (rec.cancelRequested) return res;
-
-    // ===== 5. HISTORY TASKS =====
-    await onStage("history", "running");
-    await checkTaskTypes(page, ctx);
-    await checkLivesMechanic(page, ctx, assignmentId);
-    // Тарихи дәлдік — жауаптар кілті болса ғана
-    const tHist = newTest("C-HIST-ACC", "Тарихи контенттің дәлдігі");
-    const key = await loadAnswerKey();
-    if (key && ctx.pageText.length > 0) {
-      const matches = compareAgainstKey(ctx.pageText, key);
-      const found = matches.filter((m) => m.foundInPage);
-      const correct = found.filter((m) => m.correct === true).length;
-      const wrong = found.filter((m) => m.correct === false).length;
-      tHist.actions.push(`Жауаптар кілтімен салыстырылды: ${key.length} жазба, беттен ${found.length} сұрақ табылды`);
-      tHist.expected = "Табылған сұрақ-жауаптар кілтке сәйкес";
-      if (found.length === 0) {
-        finish(tHist, "NOT_VERIFIED", "Бет мәтінінен кілттегі сұрақтар табылмады");
-      } else if (wrong === 0) {
-        finish(tHist, "PASS", `${found.length} сұрақ табылды, ${correct}-і дұрыс жауаппен`);
-      } else {
-        finish(tHist, "FAIL", `${wrong} сұрақтың жауабы кілтке сәйкес келмеді`);
-      }
-      res.historicalNotes.push(...found.map((m) => `«${m.question}» — күтілетін жауап: ${m.expectedAnswer}; бетте: ${m.correct === null ? "анықталмады" : m.correct ? "сәйкес" : "сәйкес емес"}`));
+    // ===== 5. GAME MECHANICS (профиль бойынша) =====
+    if (isModuleEnabled("mechanics")) {
+      await onStage("mechanics", "running");
+      await checkCharacters(page, ctx, profile, assignmentId);
+      await checkCoreMechanics(page, ctx, profile, assignmentId);
+      await onStage("mechanics", "done");
     } else {
-      finish(tHist, "NOT_VERIFIED", "Бекітілген жауаптар кілті (data/answer_key.json) жоқ — автоматты салыстыру мүмкін емес", {
-        limitations: "Тарихи дәлдік оқытушының қолмен тексеруін қажет етеді. Табылған сұрақ мазмұны есепке «Алдын ала АИ бағалауы» бөліміне жазылады.",
-      });
-      const qLike = ctx.pageText.match(/[^.\n]{10,120}\?/g)?.slice(0, 5) ?? [];
-      if (qLike.length) res.historicalNotes.push("Беттен табылған сұрақтар (оқытушы тексеруіне): " + qLike.join(" | "));
+      await skipModule("mechanics", STAGE_LABELS.mechanics);
     }
-    res.tests.push(tHist);
-    await onStage("history", "done");
     if (rec.cancelRequested) return res;
 
-    // ===== 6. AUTH =====
-    await onStage("auth", "running");
-    await checkGoogleAuth(page, ctx);
-    await onStage("auth", "done");
+    // ===== 6. HISTORY TASKS =====
+    if (isModuleEnabled("history")) {
+      await onStage("history", "running");
+      await checkTaskTypes(page, ctx);
+      await checkLivesMechanic(page, ctx, assignmentId);
+      // Тарихи дәлдік — жауаптар кілті болса ғана
+      const tHist = newTest("C-HIST-ACC", "Тарихи контенттің дәлдігі");
+      const key = await loadAnswerKey();
+      if (key && ctx.pageText.length > 0) {
+        const matches = compareAgainstKey(ctx.pageText, key);
+        const found = matches.filter((m) => m.foundInPage);
+        const correct = found.filter((m) => m.correct === true).length;
+        const wrong = found.filter((m) => m.correct === false).length;
+        tHist.actions.push(`Жауаптар кілтімен салыстырылды: ${key.length} жазба, беттен ${found.length} сұрақ табылды`);
+        tHist.expected = "Табылған сұрақ-жауаптар кілтке сәйкес";
+        if (found.length === 0) {
+          finish(tHist, "NOT_VERIFIED", "Бет мәтінінен кілттегі сұрақтар табылмады");
+        } else if (wrong === 0) {
+          finish(tHist, "PASS", `${found.length} сұрақ табылды, ${correct}-і дұрыс жауаппен`);
+        } else {
+          finish(tHist, "FAIL", `${wrong} сұрақтың жауабы кілтке сәйкес келмеді`);
+        }
+        res.historicalNotes.push(...found.map((m) => `«${m.question}» — күтілетін жауап: ${m.expectedAnswer}; бетте: ${m.correct === null ? "анықталмады" : m.correct ? "сәйкес" : "сәйкес емес"}`));
+      } else {
+        finish(tHist, "NOT_VERIFIED", "Бекітілген жауаптар кілті (data/answer_key.json) жоқ — автоматты салыстыру мүмкін емес", {
+          limitations: "Тарихи дәлдік оқытушының қолмен тексеруін қажет етеді. Табылған сұрақ мазмұны есепке «Алдын ала АИ бағалауы» бөліміне жазылады.",
+        });
+        const qLike = ctx.pageText.match(/[^.\n]{10,120}\?/g)?.slice(0, 5) ?? [];
+        if (qLike.length) res.historicalNotes.push("Беттен табылған сұрақтар (оқытушы тексеруіне): " + qLike.join(" | "));
+      }
+      res.tests.push(tHist);
+      await onStage("history", "done");
+    } else {
+      await skipModule("history", STAGE_LABELS.history);
+    }
     if (rec.cancelRequested) return res;
 
-    // ===== 7. RESPONSIVE =====
-    await onStage("responsive", "running");
-    await checkResponsive(page, context, ctx);
-    await onStage("responsive", "done");
+    // ===== 7. LEVELS/DIFFICULTY (10 деңгей жүйесі) =====
+    if (isModuleEnabled("levels")) {
+      await onStage("levels", "running");
+      await checkLevels(page, ctx, profile, assignmentId);
+      await onStage("levels", "done");
+    } else {
+      await skipModule("levels", STAGE_LABELS.levels);
+    }
     if (rec.cancelRequested) return res;
 
-    // ===== 8. SECURITY =====
-    await onStage("security", "running");
-    await checkSecurity(page, ctx);
-    await onStage("security", "done");
+    // ===== 8. AUTH (Google OAuth ғана) =====
+    if (isModuleEnabled("auth")) {
+      await onStage("auth", "running");
+      await checkGoogleAuth(page, ctx);
+      await onStage("auth", "done");
+    } else {
+      await skipModule("auth", STAGE_LABELS.auth);
+    }
+    if (rec.cancelRequested) return res;
 
-    // ===== 9. REPO =====
-    await onStage("repo", "running");
-    await checkRepo(ctx);
-    await onStage("repo", "done");
+    // ===== 9. BACKEND / DATA PERSISTENCE =====
+    if (isModuleEnabled("backend")) {
+      await onStage("backend", "running");
+      await checkBackendPersistence(page, ctx);
+      await onStage("backend", "done");
+    } else {
+      await skipModule("backend", STAGE_LABELS.backend);
+    }
+    if (rec.cancelRequested) return res;
 
-    // Консоль қателері — жеке тест
-    const tConsole = newTest("C-CODE", "JavaScript консоль қателері мен сәтсіз сұраныстар");
+    // ===== 10. GAME HUB PORTAL & LEADERBOARD =====
+    if (isModuleEnabled("gamehub")) {
+      await onStage("gamehub", "running");
+      await checkGameHub(page, ctx);
+      await onStage("gamehub", "done");
+    } else {
+      await skipModule("gamehub", STAGE_LABELS.gamehub);
+    }
+    if (rec.cancelRequested) return res;
+
+    // ===== 11. SECURITY AUDIT =====
+    if (isModuleEnabled("security")) {
+      await onStage("security", "running");
+      await checkSecurity(page, ctx);
+      await onStage("security", "done");
+    } else {
+      await skipModule("security", STAGE_LABELS.security);
+    }
+    // Консоль қателері мен сәтсіз желілік сұраныстар — code quality критерийіне жатады
+    // (security модулінен тәуелсіз: беттің ашық кезінде ғана өлшенеді).
+    const tConsole = newTest("C-CONSOLE", "JavaScript консоль қателері мен сәтсіз сұраныстар");
     tConsole.expected = "Консольде қате жоқ; желілік сұраныстар сәтті";
     tConsole.actions.push(`Консоль қателері: ${res.consoleErrors.length}; сәтсіз сұраныстар: ${res.failedRequests.length}`);
     const consoleShot = await takeScreenshot(page, ctx, "konsol-kuyi");
@@ -416,6 +509,17 @@ export async function runBrowserTests(
       finish(tConsole, "FAIL", `Консоль қателері: ${res.consoleErrors.length}; сәтсіз сұраныстар: ${res.failedRequests.length}. Мысал: ${(res.consoleErrors[0] ?? res.failedRequests[0] ?? "").slice(0, 150)}`, { screenshot: consoleShot });
     }
     res.tests.push(tConsole);
+    if (rec.cancelRequested) return res;
+
+    // ===== 12. SOURCE-CODE АУДИТІ (GitHub берілсе) =====
+    if (isModuleEnabled("repo")) {
+      await onStage("repo", "running");
+      await checkRepo(ctx);
+      await onStage("repo", "done");
+    } else {
+      await skipModule("repo", STAGE_LABELS.repo);
+    }
+
     return res;
   } finally {
     // Ресурстарды міндетті түрде босату
@@ -546,6 +650,23 @@ async function checkCoreMechanics(page: Page, ctx: Ctx, profile: (typeof PROFILE
     finish(t, "FAIL", "Негізгі механиканың дәлелі табылмады", { screenshot: shot });
   }
   ctx.res.tests.push(t);
+
+  // Ойын алгоритмінің тұтастығы (C-ALGO) — сол интеракция дәлелдеріне негізделген,
+  // бірақ бұл ЕШҚАШАН нақты код деңгейіндегі алгоритмді («game loop» формуласын,
+  // қиындық формуласын) растамайды — тек сырттан байқалатын мінез-құлық.
+  const tAlgo = newTest("C-ALGO", "Ойын алгоритмі мен күй ауысуының тұтастығы (game loop, прогрессия)");
+  tAlgo.expected = "Байқалатын мінез-құлық (әрекет → күй өзгерісі) логикалық, қайталанатын және бұзылмаған";
+  tAlgo.actions.push(`Алдыңғы интеракция дәлелі қайта пайдаланылды: ${interactionEvidence}`);
+  if (interactionEvidence.includes("өзгерді") && found.length >= 2) {
+    finish(tAlgo, "PARTIAL", "Сырттан байқалатын әрекет→күй ауысуы логикалық және қайталанатын, бірақ нақты алгоритм (game loop/қиындық формуласы) тек URL арқылы толық қалпына келтірілмейді", {
+      limitations: "Толық алгоритм реконструкциясы тек код деректерінсіз мүмкін емес (repositoryUrl берілсе, статикалық талдау C-CODE/C-SEC-REPO тесттерінде жүргізіледі).",
+    });
+  } else {
+    finish(tAlgo, "NOT_VERIFIED", "Әрекет→күй ауысуының жеткілікті дәлелі жиналмады — алгоритм тұтастығы тексерілмеді", {
+      limitations: "Ойын механикасының сырттан байқалатын реакциясы болмағандықтан, алгоритм логикасы туралы қорытынды жасау мүмкін емес.",
+    });
+  }
+  ctx.res.tests.push(tAlgo);
 }
 
 async function checkTaskTypes(page: Page, ctx: Ctx): Promise<void> {
@@ -678,6 +799,11 @@ async function checkGoogleAuth(page: Page, ctx: Ctx): Promise<void> {
     limitations: "Пайдаланушының жеке аккаунтына кіруге рұқсат жоқ. Оқытушы қорғау кезінде студенттен көрсетуді сұрауы керек (PDF: қорғаудың 8-пункті).",
   });
   ctx.res.tests.push(tProf);
+}
+
+async function checkGameHub(page: Page, ctx: Ctx): Promise<void> {
+  const text = await safeInnerText(page);
+  const shot = await takeScreenshot(page, ctx, "gamehub-portal");
 
   // GAME HUB порталының бөлімдері
   const tHubPages = newTest("C-HUB-PAGES", "GAME HUB порталының 6 бөлімі");
@@ -689,16 +815,25 @@ async function checkGoogleAuth(page: Page, ctx: Ctx): Promise<void> {
   else finish(tHubPages, "FAIL", "GAME HUB бөлімдері табылмады", { screenshot: shot });
   ctx.res.tests.push(tHubPages);
 
-  // Рейтинг кестесі
-  const tRating = newTest("C-HUB-RATING", "Рейтинг кестесі (Орын/Студент/Ойын/Ұпай/Деңгей)");
-  tRating.expected = "Кемінде 5 бағаны бар рейтинг кестесі көрінеді";
+  // Рейтинг кестесі (нақты деректермен — қатаң қолдан жазылмаған)
+  const tRating = newTest("C-HUB-RATING", "Рейтинг кестесі (Орын/Студент/Ойын/Ұпай/Деңгей), нақты деректермен");
+  tRating.expected = "Кемінде 5 бағаны бар рейтинг кестесі көрінеді, деректер қатаң жазылмаған (hardcoded емес)";
   const tables = await page.locator("table:visible").count();
   const ratingKeywords = containsAny(text, ["орын", "рейтинг", "ұпай", "деңгей"]);
   tRating.actions.push(`Кестелер: ${tables}; рейтинг кілт сөздері: ${ratingKeywords.join(", ") || "жоқ"}`);
   const shotR = await takeScreenshot(page, ctx, "reiting");
-  if (tables > 0 && ratingKeywords.length >= 2) finish(tRating, "PARTIAL", "Кесте және рейтинг белгілері бар; бағандардың толықтығы мен деректердің сақталуы дәлелденбеді", { screenshot: shotR, limitations: "Кестенің көрінуі нәтижелердің шынымен сақталатынын дәлелдемейді." });
-  else if (ratingKeywords.length >= 3) finish(tRating, "PARTIAL", "Рейтинг мәтіні бар, бірақ кесте табылмады", { screenshot: shotR });
-  else finish(tRating, "FAIL", "Рейтинг кестесі табылмады", { screenshot: shotR });
+  // Деректердің hardcoded еместігін жеке AJAX/fetch сұранысымен толық дәлелдеу мүмкін емес
+  // (бұл үшін екі түрлі сессиядан деректер салыстырылуы керек) — сондықтан PASS емес, тек PARTIAL.
+  if (tables > 0 && ratingKeywords.length >= 2) {
+    finish(tRating, "PARTIAL", "Кесте және рейтинг белгілері бар; бағандардың толықтығы мен деректердің нақты (hardcoded емес) екені толық дәлелденбеді", {
+      screenshot: shotR,
+      limitations: "Кестенің көрінуі нәтижелердің шынымен backend-тен келетінін толық дәлелдемейді — бұл үшін екі түрлі нәтижемен қайта тексеру қажет.",
+    });
+  } else if (ratingKeywords.length >= 3) {
+    finish(tRating, "PARTIAL", "Рейтинг мәтіні бар, бірақ кесте табылмады", { screenshot: shotR });
+  } else {
+    finish(tRating, "FAIL", "Рейтинг кестесі табылмады", { screenshot: shotR });
+  }
   ctx.res.tests.push(tRating);
 }
 
@@ -747,7 +882,7 @@ async function checkResponsive(page: Page, context: BrowserContext, ctx: Ctx): P
 
 async function checkSecurity(page: Page, ctx: Ctx): Promise<void> {
   // HTTPS
-  const tHttps = newTest("C-SEC-AUTH", "HTTPS қолданылуы");
+  const tHttps = newTest("C-SEC-HTTPS", "HTTPS қолданылуы");
   const isHttps = (ctx.res.finalUrl ?? "").startsWith("https://");
   tHttps.actions.push(`Соңғы URL: ${ctx.res.finalUrl}`);
   tHttps.expected = "Сайт HTTPS арқылы беріледі";
@@ -769,7 +904,7 @@ async function checkSecurity(page: Page, ctx: Ctx): Promise<void> {
   if (findings.length === 0) {
     finish(tSecrets, "PASS", "Құпия кілт үлгілері табылмады");
   } else {
-    finish(tSecrets, "FAIL", `Табылды: ${findings.join("; ")}`);
+    finish(tSecrets, "FAIL", `Құпия кілт анықталды — мәні әдейі жасырылды. (${findings.join("; ")})`);
     ctx.res.securityWarnings.push(`Клиенттік кодта құпия кілт іздері: ${findings.join("; ")}. Кілттерді сервер жағына көшіріңіз.`);
   }
   ctx.res.tests.push(tSecrets);
@@ -780,7 +915,7 @@ async function checkSecurity(page: Page, ctx: Ctx): Promise<void> {
   }
 
   // Input validation / XSS сынағы (қауіпсіз, бұзбайтын зонд)
-  const tXss = newTest("C-SEC-AUTH", "Енгізу өрістерінің қауіпсіздігі (XSS сынағы)");
+  const tXss = newTest("C-SEC-XSS", "Енгізу өрістерінің қауіпсіздігі (XSS сынағы)");
   tXss.expected = "Енгізілген HTML/скрипт бетте орындалмайды";
   const textInputs = page.locator("input[type='text']:visible, input:not([type]):visible, textarea:visible");
   const inputCount = Math.min(await textInputs.count(), 3);
@@ -817,17 +952,239 @@ async function checkSecurity(page: Page, ctx: Ctx): Promise<void> {
   }
   ctx.res.tests.push(tXss);
 
-  // Ұпай манипуляциясының қауіп белгілері
+  // ===== C-SEC-INPUT: бос/шектен тыс ұзын/күтпеген таңбалы енгізулер =====
+  const tInput = newTest("C-SEC-INPUT", "Енгізу валидациясы (бос, шектен тыс ұзын, күтпеген таңбалар)");
+  tInput.expected = "Бос, тым ұзын және күтпеген таңбалары бар енгізулер серверде/клиентте дұрыс өңделеді (қирау жоқ)";
+  const probeInputs = page.locator("input[type='text']:visible, input:not([type]):visible, textarea:visible");
+  const probeCount = Math.min(await probeInputs.count(), 1);
+  if (probeCount > 0) {
+    const scenarios = ["", "a".repeat(5000), "±!@#$%^&*()_+{}[]|\\<>?~`№\"';漢字😀"];
+    const errorsBefore = ctx.res.consoleErrors.length;
+    let crashed = false;
+    let probed = 0;
+    for (const scenario of scenarios) {
+      try {
+        const input = probeInputs.first();
+        await input.fill(scenario, { timeout: 2000 });
+        await page.keyboard.press("Enter").catch(() => undefined);
+        await page.waitForTimeout(250);
+        probed++;
+      } catch {
+        crashed = true;
+      }
+    }
+    const stillResponsive = await page.evaluate(() => document.readyState).catch(() => "unknown");
+    const newErrors = ctx.res.consoleErrors.length - errorsBefore;
+    tInput.actions.push(`Сценарийлер сыналды: бос, 5000 таңба, арнайы/эмодзи таңбалар (${probed}/${scenarios.length}); беттің күйі: ${stillResponsive}; жаңа консоль қателері: ${newErrors}`);
+    if (crashed || stillResponsive !== "complete") {
+      finish(tInput, "FAIL", "Енгізу сценарийінен кейін бет қирады немесе жауап бермейді", { limitations: "Тек қауіпсіз, бұзбайтын сынақтар қолданылды." });
+    } else if (newErrors > 0) {
+      finish(tInput, "PARTIAL", `Бет жұмыс істеуін жалғастырды, бірақ ${newErrors} жаңа консоль қатесі пайда болды`, { limitations: "Тек қауіпсіз, бұзбайтын сынақтар қолданылды." });
+    } else {
+      finish(tInput, "PASS", "Бос, өте ұзын және арнайы таңбалы енгізулер бетті қиратпады", {});
+    }
+  } else {
+    finish(tInput, "NOT_VERIFIED", "Мәтін енгізу өрістері табылмады", { limitations: "Енгізу валидациясын автоматты сынау мүмкін болмады." });
+  }
+  ctx.res.tests.push(tInput);
+
+  // ===== C-SEC-SESSION: рұқсатсыз қатынасты болдырмау (бақыланатын белгілер) =====
+  const tSession = newTest("C-SEC-SESSION", "Сессия басқаруы: кіру күйі, шығу, рұқсатсыз қатынасты болдырмау");
+  tSession.expected = "Аутентификацияланбаған қолданушы қорғалған беттерге кіре алмайды; сессия күйі байқалады";
+  const candidatePaths = ["/admin", "/profile", "/dashboard", "/account"];
+  const base = ctx.res.finalUrl ?? "";
+  let adminExposed = false;
+  let pathsChecked = 0;
+  if (base) {
+    try {
+      const origin = new URL(base).origin;
+      for (const p of candidatePaths) {
+        try {
+          const resp = await page.goto(origin + p, { waitUntil: "domcontentloaded", timeout: 4000 });
+          pathsChecked++;
+          if (resp && resp.status() >= 200 && resp.status() < 300) {
+            const t2 = (await safeInnerText(page)).toLowerCase();
+            if (/әкімші|admin panel|administrator|барлық пайдаланушы/i.test(t2)) {
+              adminExposed = true;
+              tSession.actions.push(`${p}: HTTP ${resp.status()}, әкімші тәрізді мазмұн аутентификациясыз көрінді`);
+            } else {
+              tSession.actions.push(`${p}: HTTP ${resp.status()}, қорғалған мазмұн белгісі табылмады`);
+            }
+          } else {
+            tSession.actions.push(`${p}: HTTP ${resp?.status() ?? "жауап жоқ"}`);
+          }
+        } catch {
+          tSession.actions.push(`${p}: қолжетімсіз/қате`);
+        }
+      }
+      await page.goto(base, { waitUntil: "domcontentloaded", timeout: 6000 }).catch(() => undefined);
+    } catch { /* базалық URL талдау қатесі */ }
+  }
+  if (pathsChecked === 0) {
+    finish(tSession, "NOT_VERIFIED", "Сессия/авторизация шекарасын тексеру мүмкін болмады", {
+      limitations: "Нақты аккаунт/сессиямен толық кіру-шығу ағынын сынау тесттік аккаунтсыз мүмкін емес.",
+    });
+  } else if (adminExposed) {
+    finish(tSession, "FAIL", "Ықтимал қорғалған бет (admin/dashboard) аутентификациясыз ашық көрінді", {
+      limitations: "Бұл тек беттің жүктелуін білдіреді — нақты деректерге қол жеткізу толық расталмады.",
+    });
+  } else {
+    finish(tSession, "PARTIAL", `${pathsChecked} ықтимал қорғалған жол тексерілді, анық бұзылу белгісі табылмады`, {
+      limitations: "Нақты Google аккаунтымен толық кіру/шығу/сессия мерзімінің аяқталу сынағы жасалмады.",
+    });
+  }
+  ctx.res.tests.push(tSession);
+
+  // ===== C-SEC-RATE: негізгі rate limiting =====
+  const tRate = newTest("C-SEC-RATE", "Негізгі rate limiting (сұраныс санын шектеу)");
+  tRate.expected = "Қысқа уақытта көп қайталанған сұраныс кезінде сервер шектеу/қате қайтарады (HTTP 429 немесе эквивалент)";
+  const apiLike = ctx.networkLog.find((n) => /\/api\/|\.json(\?|$)|firebaseio|supabase/i.test(n.url) && !/\.(png|jpg|jpeg|svg|css|woff2?)(\?|$)/i.test(n.url));
+  if (apiLike) {
+    try {
+      const statuses: number[] = await page.evaluate(async (url) => {
+        const results: number[] = [];
+        for (let i = 0; i < 6; i++) {
+          try {
+            const r = await fetch(url, { method: "GET" });
+            results.push(r.status);
+          } catch {
+            results.push(0);
+          }
+        }
+        return results;
+      }, apiLike.url);
+      tRate.actions.push(`6 қайталанған сұраныс жіберілді (${apiLike.url.slice(0, 80)}): статустар ${statuses.join(", ")}`);
+      if (statuses.includes(429)) {
+        finish(tRate, "PASS", "Сервер шектеуге жеткенде HTTP 429 қайтарды");
+      } else if (statuses.every((s) => s >= 200 && s < 300)) {
+        finish(tRate, "PARTIAL", "6 жылдам қайталанған сұраныстың барлығы сәтті өтті — анық шектеу байқалмады", {
+          limitations: "Тек 6 сұраныс жіберілді (DoS сынағы емес) — нақты лимит табалдырығы одан жоғары болуы мүмкін.",
+        });
+      } else {
+        finish(tRate, "NOT_VERIFIED", `Сұраныстар әртүрлі статуспен аяқталды (${statuses.join(", ")}) — лимиттің нәтижесі екіұшты`);
+      }
+    } catch (e) {
+      finish(tRate, "NOT_VERIFIED", `Сұраныс жіберу мүмкін болмады: ${String(e).slice(0, 120)}`);
+    }
+  } else {
+    finish(tRate, "NOT_VERIFIED", "Backend API соңғы нүктесі байқалмады — rate limiting сынауға негіз жоқ", {
+      limitations: "Тек байқалған желілік сұраныстар негізінде тексеру жасалады; API шақыруы тіркелмесе, сынау мүмкін емес.",
+    });
+  }
+  ctx.res.tests.push(tRate);
+
+  // ===== C-SEC-ANTICHEAT: рейтинг манипуляциясынан қорғау белгілері =====
+  const tAnticheat = newTest("C-SEC-ANTICHEAT", "Рейтинг манипуляциясынан қорғау (ұпайдың тек клиентте сақталмауы)");
+  tAnticheat.expected = "Ұпай/деңгей тек localStorage/клиент жадында емес, серверлік сұраныстар арқылы расталады";
   let localStorageInfo = "";
   try {
-    localStorageInfo = await page.evaluate(() => {
-      const keys = Object.keys(localStorage);
-      return keys.join(", ");
-    });
+    localStorageInfo = await page.evaluate(() => Object.keys(localStorage).join(", "));
   } catch { /* қолжетімсіз */ }
-  if (/score|ұпай|points/i.test(localStorageInfo)) {
-    ctx.res.securityWarnings.push("Ұпай localStorage-де сақталады — клиент жағынан өзгертуге осал болуы мүмкін (leaderboard manipulation тәуекелі). Серверлік тексеру қажет.");
+  const scoreInLocalStorage = /score|ұпай|points|level|деңгей/i.test(localStorageInfo);
+  const hasBackendTraffic = ctx.networkLog.some((n) => /firebaseio|supabase|\/api\/|googleapis\.com\/.*firestore/i.test(n.url));
+  tAnticheat.actions.push(`localStorage кілттері: ${localStorageInfo || "жоқ"}; backend-ке ұқсас желілік сұраныс: ${hasBackendTraffic ? "бар" : "жоқ"}`);
+  if (scoreInLocalStorage) ctx.res.securityWarnings.push("Ұпай/деңгей localStorage-де сақталады — клиент жағынан өзгертуге осал болуы мүмкін (leaderboard manipulation тәуекелі). Серверлік тексеру қажет.");
+  if (scoreInLocalStorage && !hasBackendTraffic) {
+    finish(tAnticheat, "FAIL", "Ұпай/деңгей тек localStorage-де табылды, серверлік сұраныс байқалмады — манипуляция тәуекелі жоғары");
+  } else if (scoreInLocalStorage && hasBackendTraffic) {
+    finish(tAnticheat, "PARTIAL", "Ұпай localStorage-де де, серверлік сұраныстар да бар — серверлік тексерудің толықтығы автоматты расталмады", {
+      limitations: "Серверлік валидацияның іс жүзінде орындалатынын (мысалы, клиенттен келген ұпайды сервер қайта есептейтінін) тексеру үшін backend кодын немесе API жауабын талдау қажет.",
+    });
+  } else if (hasBackendTraffic) {
+    finish(tAnticheat, "PARTIAL", "Серверлік сұраныстар байқалды, localStorage-де ұпай белгісі жоқ — жақсы белгі, бірақ толық сервер жағындағы валидация расталмады");
+  } else {
+    finish(tAnticheat, "NOT_VERIFIED", "Ұпай сақтау тәсілінің байқалатын дәлелі жиналмады");
   }
+  ctx.res.tests.push(tAnticheat);
+}
+
+async function checkAccessibility(page: Page, ctx: Ctx): Promise<void> {
+  const t = newTest("C-A11Y", "Негізгі автоматты қолжетімділік (accessibility) тексеруі");
+  t.expected = "Батырмаларда қолжетімді атаулар, өрістерде белгілер, логикалық тақырып құрылымы бар; критикалық accessibility қателері жоқ";
+  try {
+    const results = await new AxeBuilder({ page }).analyze();
+    const critical = results.violations.filter((v) => v.impact === "critical");
+    const serious = results.violations.filter((v) => v.impact === "serious");
+    const other = results.violations.length - critical.length - serious.length;
+    t.actions.push(
+      `axe-core сканері орындалды: барлығы ${results.violations.length} бұзушылық (critical: ${critical.length}, serious: ${serious.length}, басқа: ${other})`,
+    );
+    const examples = results.violations.slice(0, 3).map((v) => `${v.id} (${v.impact ?? "?"}, ${v.nodes.length} элемент)`);
+    if (examples.length) t.actions.push(`Мысалдар: ${examples.join("; ")}`);
+    if (critical.length === 0 && serious.length === 0) {
+      finish(t, "PASS", `Критикалық/маңызды accessibility бұзушылығы табылмады (жалпы: ${results.violations.length})`);
+    } else if (critical.length === 0) {
+      finish(t, "PARTIAL", `${serious.length} маңызды accessibility бұзушылығы табылды: ${examples.join("; ")}`, {
+        limitations: "Тек автоматты түрде анықталатын мәселелер тексерілді — толық қолмен accessibility аудиті емес.",
+      });
+    } else {
+      finish(t, "FAIL", `${critical.length} критикалық accessibility бұзушылығы табылды: ${examples.join("; ")}`, {
+        limitations: "Тек автоматты түрде анықталатын мәселелер тексерілді — толық қолмен accessibility аудиті емес.",
+      });
+    }
+  } catch (e) {
+    finish(t, "NOT_VERIFIED", `axe-core сканерін орындау мүмкін болмады: ${String(e).slice(0, 150)}`);
+  }
+  ctx.res.tests.push(t);
+}
+
+async function checkBackendPersistence(page: Page, ctx: Ctx): Promise<void> {
+  // ===== C-BACKEND: нақты backend қолданылуының байқалатын дәлелі =====
+  const tBackend = newTest("C-BACKEND", "Backend/дерекқор қолданылуының байқалатын дәлелі (Firebase/Supabase/API)");
+  tBackend.expected = "Желілік сұраныстар немесе бет коды нақты backend (Firebase/Supabase/меншікті API) қолданылатынын көрсетеді";
+  const backendHosts = ctx.networkLog
+    .map((n) => { try { return new URL(n.url).hostname; } catch { return ""; } })
+    .filter((h) => /firebaseio\.com|firebaseapp\.com|googleapis\.com|supabase\.co|herokuapp\.com|vercel\.app|onrender\.com|railway\.app/i.test(h));
+  const uniqueHosts = Array.from(new Set(backendHosts));
+  let html = "";
+  try { html = await page.content(); } catch { /* бет жабылған */ }
+  const sdkMentioned = /firebase|supabase|firestore|realtime database/i.test(html);
+  tBackend.actions.push(`Backend-ке ұқсас хосттар: ${uniqueHosts.join(", ") || "жоқ"}; кодта SDK белгісі: ${sdkMentioned ? "бар" : "жоқ"}`);
+  if (uniqueHosts.length > 0) {
+    finish(tBackend, "PASS", `Нақты backend трафигі байқалды: ${uniqueHosts.join(", ")}`, {
+      limitations: "URL-only режимде тек байқалатын мінез-құлық тексеріледі; backend-тің нақты қауіпсіздігі/архитектурасы расталмайды.",
+    });
+  } else if (sdkMentioned) {
+    finish(tBackend, "PARTIAL", "Кодта backend SDK белгісі бар, бірақ нақты желілік сұраныс байқалмады", {
+      limitations: "SDK қосылуы міндетті түрде белсенді backend қолданысын білдірмейді.",
+    });
+  } else {
+    finish(tBackend, "NOT_VERIFIED", "Backend қолданысының байқалатын дәлелі табылмады", {
+      limitations: "Бұл backend жоқ дегенді білдірмейді — желілік сұраныстар бұғатталған немесе кешіктірілген болуы мүмкін.",
+    });
+  }
+  ctx.res.tests.push(tBackend);
+
+  // ===== C-PERSIST: нәтиженің сақталуы (қайта жүктегенде) =====
+  const tPersist = newTest("C-PERSIST", "Нәтиженің сақталуы (бетті қайта жүктегенде/жаңа сессияда)");
+  tPersist.expected = "Беттің мазмұны/күйі тек жадта емес, қайта жүктегеннен кейін де байқалатын деңгейде сақталады";
+  let lsBefore = "";
+  try { lsBefore = await page.evaluate(() => JSON.stringify(localStorage)); } catch { /* қолжетімсіз */ }
+  const textBefore = await safeInnerText(page);
+  try {
+    await page.reload({ waitUntil: "domcontentloaded", timeout: 10000 });
+    await page.waitForTimeout(800);
+    let lsAfter = "";
+    try { lsAfter = await page.evaluate(() => JSON.stringify(localStorage)); } catch { /* қолжетімсіз */ }
+    const textAfter = await safeInnerText(page);
+    const lsPersisted = lsBefore.length > 2 && lsBefore === lsAfter;
+    const textSimilar = textAfter.length > 0 && Math.abs(textAfter.length - textBefore.length) < Math.max(50, textBefore.length * 0.3);
+    tPersist.actions.push(`Бет қайта жүктелді; localStorage сақталды: ${lsPersisted ? "иә" : "жоқ/бос"}; мәтін ұзындығы сәйкес: ${textSimilar ? "иә" : "жоқ"}`);
+    if (lsPersisted) {
+      finish(tPersist, "PARTIAL", "localStorage деректері қайта жүктегеннен кейін де сақталды (клиенттік сақтау дәлелі)", {
+        limitations: "Бұл тек клиенттік (localStorage) сақтауды дәлелдейді — серверлік/дерекқорлық сақтауды (басқа құрылғыда/аккаунтта көрінуін) толық растамайды.",
+      });
+    } else if (textSimilar) {
+      finish(tPersist, "NOT_VERIFIED", "Бет қайта жүктелді, бірақ сақталатын деректің нақты дәлелі табылмады", {
+        limitations: "Аутентификациясыз толық профиль сақталуын тексеру мүмкін емес.",
+      });
+    } else {
+      finish(tPersist, "NOT_VERIFIED", "Қайта жүктеу алдындағы/кейінгі күйді сенімді салыстыру мүмкін болмады");
+    }
+  } catch (e) {
+    finish(tPersist, "NOT_VERIFIED", `Бетті қайта жүктеу мүмкін болмады: ${String(e).slice(0, 120)}`);
+  }
+  ctx.res.tests.push(tPersist);
 }
 
 async function checkRepo(ctx: Ctx): Promise<void> {
@@ -886,7 +1243,7 @@ async function checkRepo(ctx: Ctx): Promise<void> {
           if (secretHits === 0) {
             finish(tRepo, "PASS", `${scanTargets.length} файл сканерленді — құпия кілт табылмады`);
           } else {
-            finish(tRepo, "FAIL", `Құпия белгілері: ${[...secretLabels].join("; ")}`);
+            finish(tRepo, "FAIL", `Құпия кілт анықталды — мәні әдейі жасырылды. (${[...secretLabels].join("; ")})`);
             ctx.res.securityWarnings.push(`Репозиторийде құпия кілт іздері: ${[...secretLabels].join("; ")}. Кілттерді дереу ауыстырып, тарихтан өшіріңіз.`);
           }
           const hasReadme = files.some((f) => /readme/i.test(f.path));

@@ -64,7 +64,7 @@ describe("детерминистік ұпай", () => {
   });
 
   it("тексерілмеген талаптар ұпай алмайды және нөл алмайды", () => {
-    const only = reqs.filter((r) => r.criterionKey === "mechanics").map((r) => t(r.id, "PASS", "s.png"));
+    const only = reqs.filter((r) => r.criterionKey === "gameplay").map((r) => t(r.id, "PASS", "s.png"));
     const out = scoreEvaluation(reqs, only, DEFAULT_RUBRIC);
     const unverified = out.criteria.filter((c) => !c.verified);
     expect(unverified.length).toBeGreaterThan(0);
@@ -75,22 +75,22 @@ describe("детерминистік ұпай", () => {
   });
 
   it("FAIL талап критерий ұпайын азайтады", () => {
-    const mechReqs = reqs.filter((r) => r.criterionKey === "mechanics");
+    const mechReqs = reqs.filter((r) => r.criterionKey === "gameplay");
     const testsPass = mechReqs.map((r) => t(r.id, "PASS", "s.png"));
     const testsFail = mechReqs.map((r) => t(r.id, "FAIL"));
     const full = scoreEvaluation(reqs, testsPass, DEFAULT_RUBRIC);
     const failed = scoreEvaluation(reqs, testsFail, DEFAULT_RUBRIC);
-    const mechFull = full.criteria.find((c) => c.key === "mechanics")!;
-    const mechFail = failed.criteria.find((c) => c.key === "mechanics")!;
+    const mechFull = full.criteria.find((c) => c.key === "gameplay")!;
+    const mechFail = failed.criteria.find((c) => c.key === "gameplay")!;
     expect(mechFull.earnedPoints).toBe(mechFull.maxPoints);
     expect(mechFail.earnedPoints).toBe(0);
   });
 
   it("PARTIAL = жарым ұпай", () => {
-    const mechReqs = reqs.filter((r) => r.criterionKey === "mechanics");
+    const mechReqs = reqs.filter((r) => r.criterionKey === "gameplay");
     const tests = mechReqs.map((r) => t(r.id, "PARTIAL"));
     const out = scoreEvaluation(reqs, tests, DEFAULT_RUBRIC);
-    const mech = out.criteria.find((c) => c.key === "mechanics")!;
+    const mech = out.criteria.find((c) => c.key === "gameplay")!;
     expect(mech.earnedPoints).toBe(round2(mech.maxPoints * 0.5));
   });
 
@@ -104,7 +104,7 @@ describe("детерминистік ұпай", () => {
   });
 
   it("дәлел сенімділігі құжатталған формула бойынша", () => {
-    const mechReqs = reqs.filter((r) => r.criterionKey === "mechanics");
+    const mechReqs = reqs.filter((r) => r.criterionKey === "gameplay");
     const tests = mechReqs.map((r) => t(r.id, "PASS")); // скриншотсыз
     const out = scoreEvaluation(reqs, tests, DEFAULT_RUBRIC);
     // quality = 0.6 (скриншот жоқ); confidence = 0.7*coverage + 0.3*0.6

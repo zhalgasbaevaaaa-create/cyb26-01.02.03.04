@@ -7,3 +7,5 @@ export * from "./requirements.js";
 export * from "./rubric.js";
 export * from "./scoring.js";
 export * from "./csv.js";
+export * from "./settings.js";
+

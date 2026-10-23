@@ -1,10 +1,10 @@
 // Тапсырмалар кезегі: нақты күй, болдырмау, таймаут, дубликатты болдырмау.
 import { randomUUID } from "node:crypto";
 import { CONFIG } from "../config.js";
-import { getEvaluation, listEvaluations, saveEvaluation, getActiveRubric } from "../db/store.js";
+import { getEvaluation, listEvaluations, saveEvaluation, getActiveRubric, getModuleSettings } from "../db/store.js";
 import { runBrowserTests, makeStages, type ExecutorResult } from "../browser/executor.js";
-import { requirementsForAssignment, getAssignment, scoreEvaluation, scoringStatement } from "@gha/shared";
-import type { AuditRequest, EvaluationRecord, JobStage } from "@gha/shared";
+import { requirementsForAssignment, getAssignment, scoreEvaluation, scoringStatement, computeCriticalFailures } from "@gha/shared";
+import type { AuditMode, AuditRequest, EvaluationRecord, JobStage } from "@gha/shared";
 import { generatePdfReport } from "../reports/pdf.js";
 import { generateCsvReport } from "../reports/csv.js";
 
@@ -14,6 +14,11 @@ interface QueuedJob {
 
 const queue: QueuedJob[] = [];
 let runningCount = 0;
+
+/** MODE A (тек URL) / MODE B (URL + GitHub) — master prompt §5. */
+function detectMode(repositoryUrl?: string): AuditMode {
+  return repositoryUrl && /github\.com/i.test(repositoryUrl) ? "URL_GITHUB" : "URL_ONLY";
+}
 
 export function queueLength(): number {
   return queue.length;
@@ -51,6 +56,7 @@ export async function createAudit(
     stages: makeStages(),
     progress: 0,
     rubricVersion: rubric.version,
+    mode: detectMode(req.repositoryUrl),
     tests: [],
     criteria: [],
     totalScore: 0,
@@ -61,6 +67,7 @@ export async function createAudit(
     historicalNotes: [],
     topImprovements: [],
     limitations: [],
+    criticalFailures: [],
     reportRefs: {},
   };
   await saveEvaluation(rec);
@@ -101,6 +108,7 @@ export async function retest(id: string): Promise<{ ok: true; record: Evaluation
   }, { isRetest: true }).then((r) => {
     if (r.ok) {
       r.record.retestOf = id;
+      r.record.previousScore = rec.provisionalScore;
       void saveEvaluation(r.record);
     }
     return r;
@@ -133,17 +141,24 @@ async function runJob(id: string): Promise<void> {
   rec.progress = 0;
   await saveEvaluation(rec);
 
+  const moduleSettings = await getModuleSettings();
   const timeout = setTimeout(() => {
     rec.cancelRequested = true;
     void saveEvaluation(rec);
-  }, CONFIG.jobTimeoutMs);
+  }, moduleSettings.timeouts.jobTimeoutMs || CONFIG.jobTimeoutMs);
 
   try {
     const assignment = getAssignment(rec.assignmentId);
     const reqs = requirementsForAssignment(rec.assignmentId);
-    const result: ExecutorResult = await runBrowserTests(rec, rec.assignmentId, reqs, async (key, status) => {
-      await setStage(rec, key, status);
-    });
+    const result: ExecutorResult = await runBrowserTests(
+      rec,
+      rec.assignmentId,
+      reqs,
+      async (key, status) => {
+        await setStage(rec, key, status);
+      },
+      moduleSettings,
+    );
 
     rec.tests = result.tests;
     rec.securityWarnings = result.securityWarnings;
@@ -156,9 +171,14 @@ async function runJob(id: string): Promise<void> {
       return;
     }
 
-    // Ұпайды есептеу
-    await setStage(rec, "scoring", "running");
+    // ===== 13. REQUIREMENTS СӘЙКЕСТІГІ: талаптар мен нәтижелерді сәйкестендіру =====
+    await setStage(rec, "requirements", "running");
     const rubric = await getActiveRubric();
+    rec.criticalFailures = computeCriticalFailures(rec.tests, rec.assignmentId);
+    await setStage(rec, "requirements", "done");
+
+    // ===== 14. БАҒАЛАУ: детерминистік ұпай есептеу =====
+    await setStage(rec, "scoring", "running");
     const scoring = scoreEvaluation(reqs, rec.tests, rubric);
     rec.criteria = scoring.criteria;
     rec.totalScore = scoring.totalScore;
@@ -169,21 +189,23 @@ async function runJob(id: string): Promise<void> {
     rec.limitations = [...scoring.limitations, ...result.limitations];
     rec.rubricVersion = rubric.version;
     rec.finishedAt = new Date().toISOString();
+    await setStage(rec, "scoring", "done");
 
-    // Есептерді дайындау (күй «completed» боларДАН БҰРЫН — клиент толық жазбаны алуы үшін)
+    // ===== 15. ҚОРЫТЫНДЫ ЕСЕП: PDF/CSV дайындау (күй «completed» боларДАН БҰРЫН) =====
+    await setStage(rec, "report", "running");
     try {
-      rec.reportRefs.pdf = await generatePdfReport(rec, assignment?.title ?? rec.assignmentId);
+      rec.reportRefs.pdf = await generatePdfReport(rec, assignment?.title ?? rec.assignmentId, rubric);
     } catch (e) {
       console.error("PDF есебі дайындалмады:", e);
     }
     try {
-      rec.reportRefs.csv = await generateCsvReport(rec);
+      rec.reportRefs.csv = await generateCsvReport(rec, rubric);
     } catch (e) {
       console.error("CSV есебі дайындалмады:", e);
     }
     rec.limitations.push(scoringStatement(rec, scoring.scoreType));
     rec.status = result.loadFailed && result.tests.every((t) => t.status === "BLOCKED") ? "blocked" : "completed";
-    await setStage(rec, "scoring", "done");
+    await setStage(rec, "report", "done");
     await saveEvaluation(rec);
   } catch (e) {
     rec.status = "failed";

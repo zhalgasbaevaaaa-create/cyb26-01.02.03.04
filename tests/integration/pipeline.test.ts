@@ -146,7 +146,7 @@ describe("толық аудит: fixture сайт (A1 профилі)", () => {
     expect(byReq("A1-MECH").some((t) => t.status === "PASS"), "механика PASS").toBe(true);
 
     // --- БҰЗЫЛҒАН/ЖОҚ мүмкіндіктер FAIL/NOT_VERIFIED болуы керек ---
-    expect(byReq("C-SEC-AUTH").some((t) => t.status === "FAIL"), "HTTP (HTTPS емес) FAIL").toBe(true);
+    expect(byReq("C-SEC-HTTPS").some((t) => t.status === "FAIL"), "HTTP (HTTPS емес) FAIL").toBe(true);
     const task4 = byReq("C-TASK-4");
     expect(["FAIL", "NOT_VERIFIED", "PARTIAL"], "карта тапсырмасы жоқ").toContain(task4[0]?.status);
     expect(task4[0]?.status).not.toBe("PASS");
@@ -164,10 +164,13 @@ describe("толық аудит: fixture сайт (A1 профилі)", () => {
     expect(rec.totalScore).toBeLessThan(100);
     expect(rec.provisionalScore).toBeGreaterThan(0);
     expect(rec.verificationCoverage).toBeGreaterThan(0.3);
-    // Тексерілмеген критерий нөл ұпай алады, бірақ verified=false
-    const histAcc = rec.criteria.find((c) => c.key === "history_accuracy")!;
-    expect(histAcc.verified).toBe(false);
-    expect(histAcc.earnedPoints).toBe(0);
+    // history_tasks критерийі ішінде C-HIST-ACC (жауап кілті жоқ) NOT_VERIFIED болғандықтан,
+    // ол талап ұпайға әсер етпейді (жаңа 10-критерий жүйесінде history_tasks 13 талапты
+    // біріктіреді, сондықтан басқа тапсырмалар PASS болса, критерий жалпы verified=true
+    // болуы мүмкін — бірақ C-HIST-ACC нақты «тексерілмеген» тізімде көрінуі керек).
+    const histTasks = rec.criteria.find((c) => c.key === "history_tasks")!;
+    expect(histTasks.unverifiedRequirements).toContain("C-HIST-ACC");
+    expect(histTasks.earnedPoints).toBeLessThan(histTasks.maxPoints);
     // Жиынтық ереже: әр критерий ұпайы ≤ максимум
     for (const c of rec.criteria) expect(c.earnedPoints).toBeLessThanOrEqual(c.maxPoints);
 
@@ -196,7 +199,7 @@ describe("толық аудит: fixture сайт (A1 профилі)", () => {
     expect(csv.startsWith("\uFEFF")).toBe(true);
     expect(csv).toContain("Сынақ Студент");
     expect(csv).toContain("КРИТЕРИЙЛЕР");
-    expect(csv).toContain("Сәтті өтті");
+    expect(csv).toContain("Орындалды");
   }, 300_000);
 
   it("дубликат жоба 5 минут ішінде қайта қабылданбайды", async () => {
@@ -231,5 +234,61 @@ describe("есептерді қорғалған жүктеу", () => {
     expect(noAuth.status).toBe(401);
     const withAuth = await fetch(`${base}/api/reports/${file}`, { headers: auth });
     expect(withAuth.status).toBe(200);
+  });
+});
+
+describe("тест модульдерін баптау (әкімші)", () => {
+  type Tests = { requirementId: string; status: string }[];
+
+  it("әдепкі параметрлер қолжетімді", async () => {
+    const r = await fetch(`${base}/api/settings/modules`, { headers: auth });
+    expect(r.status).toBe(200);
+    const s = (await r.json()) as { enabledModules: Record<string, boolean> };
+    expect(s.enabledModules.security).toBe(true);
+  });
+
+  it("модульді өшіру тиісті талаптарды ТЕКСЕРІЛМЕДІ күйінде қалдырады, ал бағаны нөлдемейді", async () => {
+    // Security модулін өшіру
+    const getResp = await fetch(`${base}/api/settings/modules`, { headers: auth });
+    const current = await getResp.json();
+    const putResp = await fetch(`${base}/api/settings/modules`, {
+      method: "PUT", headers: auth,
+      body: JSON.stringify({ ...current, enabledModules: { ...current.enabledModules, security: false } }),
+    });
+    expect(putResp.status).toBe(200);
+
+    const r = await fetch(`${base}/api/audits`, {
+      method: "POST", headers: auth,
+      body: JSON.stringify({ studentName: "Модуль Сынағы", groupName: "CYB26-TEST", projectUrl: `${base}/fixture/`, assignmentId: "A2" }),
+    });
+    expect(r.status).toBe(202);
+    const { id } = (await r.json()) as { id: string };
+    const rec = (await waitForAudit(id)) as { status: string; tests: Tests; criteria: { key: string; earnedPoints: number }[] };
+    expect(rec.status).toBe("completed");
+
+    // Security модулінің тесттері мүлде орындалмауы керек
+    const secTests = rec.tests.filter((t) => t.requirementId.startsWith("C-SEC-") && t.requirementId !== "C-SEC-REPO");
+    expect(secTests.length).toBe(0);
+    // Модульдің өшірілгені туралы дәлел тіркелуі керек
+    expect(rec.tests.some((t) => t.requirementId === "EVIDENCE-MODULE-SECURITY" && t.status === "NOT_VERIFIED")).toBe(true);
+    // cybersecurity критерийі нөлге теңелмейді (NOT_VERIFIED қалады, verified=false, earnedPoints=0 — бұл дұрыс, себебі ешбір талап тексерілген жоқ)
+    const cyberCrit = rec.criteria.find((c) => c.key === "cybersecurity")!;
+    expect(cyberCrit.earnedPoints).toBe(0);
+
+    // Әдепкі параметрлерді қалпына келтіру (басқа тесттерге әсер етпеу үшін)
+    await fetch(`${base}/api/settings/modules`, {
+      method: "PUT", headers: auth,
+      body: JSON.stringify(current),
+    });
+  }, 60_000);
+
+  it("жарамсыз таймаут мәні қабылданбайды", async () => {
+    const getResp = await fetch(`${base}/api/settings/modules`, { headers: auth });
+    const current = await getResp.json();
+    const r = await fetch(`${base}/api/settings/modules`, {
+      method: "PUT", headers: auth,
+      body: JSON.stringify({ ...current, timeouts: { ...current.timeouts, navTimeoutMs: 500 } }),
+    });
+    expect(r.status).toBe(400);
   });
 });

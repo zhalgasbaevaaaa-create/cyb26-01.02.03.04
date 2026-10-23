@@ -6,10 +6,10 @@ import fs from "node:fs";
 import { z } from "zod";
 import { CONFIG, firebaseConfigured, googleOAuthConfigured } from "./config.js";
 import { createAudit, cancelAudit, retest, queueLength } from "./jobs/runner.js";
-import { listEvaluations, getEvaluation, deleteEvaluation, getActiveRubric, saveRubric, listRubrics } from "./db/store.js";
-import { ASSIGNMENTS, REQUIREMENTS, validateRubric, kz } from "@gha/shared";
+import { listEvaluations, getEvaluation, deleteEvaluation, getActiveRubric, saveRubric, listRubrics, getModuleSettings, saveModuleSettings } from "./db/store.js";
+import { ASSIGNMENTS, REQUIREMENTS, validateRubric, kz, DEFAULT_MODULE_SETTINGS, validateModuleSettings, DEFAULT_GRADING_BANDS } from "@gha/shared";
 import { validateUrl } from "@gha/shared/src/urlSecurity.js";
-import type { RubricVersion } from "@gha/shared";
+import type { RubricVersion, ModuleSettings } from "@gha/shared";
 
 export function createApp() {
   const app = express();
@@ -137,6 +137,9 @@ export function createApp() {
       criteria: body.criteria,
       passThreshold: Number(body.passThreshold ?? 60),
       provisionalThreshold: Number(body.provisionalThreshold ?? 0.7),
+      gradingBands: Array.isArray(body.gradingBands) && body.gradingBands.length > 0
+        ? body.gradingBands.map((b) => ({ min: Number(b.min), label: String(b.label) }))
+        : DEFAULT_GRADING_BANDS,
     };
     const validation = validateRubric(rubric);
     if (!validation.valid) {
@@ -145,6 +148,27 @@ export function createApp() {
     }
     await saveRubric(rubric);
     res.json({ ok: true, rubric, message: `Сақталған нұсқа: ${rubric.version}` });
+  });
+
+  // ===== Тест модульдері мен таймауттар (әкімші баптайды) =====
+  app.get("/api/settings/modules", requireAuth(), async (_req, res) => {
+    res.json(await getModuleSettings());
+  });
+
+  app.put("/api/settings/modules", requireAuth(), async (req, res) => {
+    const body = req.body as Partial<ModuleSettings>;
+    const settings: ModuleSettings = {
+      enabledModules: { ...DEFAULT_MODULE_SETTINGS.enabledModules, ...(body.enabledModules ?? {}) },
+      timeouts: { ...DEFAULT_MODULE_SETTINGS.timeouts, ...(body.timeouts ?? {}) },
+      updatedAt: new Date().toISOString(),
+    };
+    const validation = validateModuleSettings(settings);
+    if (!validation.valid) {
+      res.status(400).json({ error: "Параметрлер жарамсыз.", details: validation.errors });
+      return;
+    }
+    await saveModuleSettings(settings);
+    res.json({ ok: true, settings, message: "Тест модульдері мен таймауттар сақталды." });
   });
 
   // ===== Есептер мен дәлелдер (авторизациямен қорғалған) =====

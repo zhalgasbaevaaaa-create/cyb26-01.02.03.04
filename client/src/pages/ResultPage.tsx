@@ -1,24 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, fetchBlob, getToken } from "../api";
-import { kz, REQUIREMENTS, scoringStatement } from "@gha/shared";
+import { kz, REQUIREMENTS, scoringStatement, CRITERION_LABELS } from "@gha/shared";
 import type { EvaluationRecord, TestStatus } from "@gha/shared";
 import { DownloadButton, JobStatusBadge, Spinner, StatusBadge, ErrorBox } from "../components/ui";
 
-const CRITERION_LABELS: Record<string, string> = {
-  compliance: "Тапсырмаға сәйкестік және ойынның толықтығы",
-  mechanics: "Негізгі ойын механикасы және кезеңдер",
-  history_tasks: "Тарихи тапсырмалар және міндетті тапсырма форматтары",
-  auth_profile: "Аутентификация, профиль және сақталған нәтижелер",
-  gamehub: "GAME HUB порталы және рейтинг жүйесі",
-  backend_security: "Backend жүзеге асырылуы және қауіпсіздік",
-  ui_responsive: "Пайдаланушы интерфейсі және адаптивті дизайн",
-  history_accuracy: "Тарихи контенттің дәлдігі",
-  code_quality: "Код сапасы, тестілеу және презентацияға дайындық",
-};
-
 function reqText(id: string): string {
   return REQUIREMENTS.find((r) => r.id === id)?.displayText ?? id;
+}
+
+function round1(n: number): number {
+  return Math.round(n * 10) / 10;
 }
 
 export default function ResultPage() {
@@ -102,6 +94,12 @@ export default function ResultPage() {
         </div>
         <div className="flex items-center gap-2">
           <JobStatusBadge status={rec.status} />
+          <span
+            className="text-xs px-2 py-1 rounded-full border border-gray-600 text-gray-300"
+            title={rec.mode === "URL_GITHUB" ? kz.mode.urlGithubHint : kz.mode.urlOnlyHint}
+          >
+            {rec.mode === "URL_GITHUB" ? kz.mode.URL_GITHUB : kz.mode.URL_ONLY}
+          </span>
           {active && (
             <button className="btn-danger" onClick={cancel} disabled={busy === "cancel"}>
               {kz.form.cancelAudit}
@@ -137,9 +135,55 @@ export default function ResultPage() {
         </ul>
       </div>
 
+      {/* Critical Fail белгілері */}
+      {(rec.status === "completed" || rec.status === "blocked") && rec.criticalFailures.length > 0 && (
+        <div className="card border border-red-600/60 bg-red-950/20">
+          <h2 className="font-semibold mb-2 text-red-400">⚠ {kz.critical.title} ({rec.criticalFailures.length})</h2>
+          <p className="text-xs text-gray-400 mb-2">{kz.critical.hint}</p>
+          <ul className="list-disc pl-5 text-sm text-red-300 space-y-1">
+            {rec.criticalFailures.map((cf) => <li key={cf.key}>{cf.message}</li>)}
+          </ul>
+        </div>
+      )}
+
       {/* Ұпай */}
       {rec.status === "completed" || rec.status === "blocked" ? (
         <>
+          {typeof rec.previousScore === "number" && (
+            <div className="card flex flex-wrap gap-6 items-end">
+              <div>
+                <div className="text-xs text-gray-400">{kz.retest.previousScore}</div>
+                <div className="text-2xl font-semibold text-gray-300">{rec.previousScore}/100</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-400">{kz.retest.newScore}</div>
+                <div className="text-2xl font-semibold text-gold">{rec.provisionalScore}/100</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-400">{kz.retest.change}</div>
+                <div
+                  className={`text-2xl font-bold ${
+                    rec.provisionalScore > rec.previousScore
+                      ? "text-green-400"
+                      : rec.provisionalScore < rec.previousScore
+                        ? "text-red-400"
+                        : "text-gray-400"
+                  }`}
+                >
+                  {rec.provisionalScore > rec.previousScore ? "+" : ""}
+                  {round1(rec.provisionalScore - rec.previousScore)}
+                  {" "}
+                  (
+                  {rec.provisionalScore > rec.previousScore
+                    ? kz.retest.improved
+                    : rec.provisionalScore < rec.previousScore
+                      ? kz.retest.worsened
+                      : kz.retest.unchanged}
+                  )
+                </div>
+              </div>
+            </div>
+          )}
           <div className="card">
             <div className="flex flex-wrap gap-6 items-end">
               <div>

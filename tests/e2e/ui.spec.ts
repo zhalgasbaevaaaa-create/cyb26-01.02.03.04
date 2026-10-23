@@ -4,6 +4,11 @@ import { test, expect } from "@playwright/test";
 const TOKEN = "e2e-token";
 
 test("кіру, аудит бастау, нәтиже беті және қазақша UI", async ({ page }) => {
+  // Барлық беттерде JS pageerror (ұсталмаған ерекшелік) болмауын қадағалаймыз
+  // (SettingsPage/ComparisonPage/RubricPage қоса — backlog талабы).
+  const pageErrors: string[] = [];
+  page.on("pageerror", (e) => pageErrors.push(String(e)));
+
   // 1. Кіру беті
   await page.goto("/");
   await expect(page.locator("text=GAME HUB PROJECT AUDITOR")).toBeVisible();
@@ -62,7 +67,7 @@ test("кіру, аудит бастау, нәтиже беті және қаза
   // 6. Нәтиже мазмұны қазақша
   await expect(page.locator("text=Қорытынды баға").first()).toBeVisible();
   await expect(page.locator("text=Бағалау критерийлері").first()).toBeVisible();
-  await expect(page.locator("text=Сәтті өтті").first()).toBeVisible();
+  await expect(page.locator("text=Орындалды").first()).toBeVisible();
   await expect(page.locator("text=Дәлелдер мен скриншоттар").first()).toBeVisible();
   await expect(page.locator("text=Ең маңызды 5 ұсыныс").first()).toBeVisible();
   await expect(page.locator("button", { hasText: "Есепті PDF форматында жүктеу" })).toBeVisible();
@@ -79,16 +84,28 @@ test("кіру, аудит бастау, нәтиже беті және қаза
   await page.locator("a.navlink", { hasText: "Тексеру тарихы" }).click();
   await expect(page.locator("text=E2E Студент").first()).toBeVisible();
 
-  // 8. Рубрика беті — жиынтық валидациясы
+  // 8. Рубрика беті — v2.0 (10 критерий) жиынтық валидациясы + қорытынды баға деңгейлері
   await page.locator("a.navlink", { hasText: "Бағалау критерийлерін баптау" }).click();
   await expect(page.locator("text=Жиынтық 100 ұпайға тең болуы керек")).toBeVisible();
-  await expect(page.locator("text=Тапсырмаға сәйкестік және ойынның толықтығы").first()).toBeVisible();
+  await expect(page.locator("text=Google OAuth").first()).toBeVisible();
+  await expect(page.locator("text=Киберқауіпсіздік").first()).toBeVisible();
+  await expect(page.locator("text=Қорытынды баға деңгейлері (FINAL DECISION)")).toBeVisible();
+  await expect(page.locator("text=Өте жоғары деңгей").first()).toBeVisible();
+  await expect(page.locator("text=Қанағаттанарлық").first()).toBeVisible();
 
-  // 9. Параметрлер беті — инфрақұрылым күйі
+  // 9. Параметрлер беті — инфрақұрылым күйі + тест модульдерін баптау
   await page.locator("a.navlink", { hasText: "Жүйе параметрлері" }).click();
   await expect(page.locator("text=Инфрақұрылым күйі")).toBeVisible();
   await expect(page.locator("text=Playwright браузер ортасы")).toBeVisible();
   await expect(page.locator("text=SSRF қорғанысы")).toBeVisible();
+
+  // 10. Салыстыру беті — аяқталған тексеру көрінеді және таңдауға болады
+  await page.locator("a.navlink", { hasText: "Студенттерді салыстыру" }).click();
+  await expect(page.locator("text=Студенттерді салыстыру").first()).toBeVisible();
+  await expect(page.locator("text=E2E Студент").first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator("text=Салыстыру үшін жоғарыдағы кестеден жазбаларды таңдаңыз.")).toBeVisible();
+
+  expect(pageErrors, `Беттерде ұсталмаған JS қателері болмауы керек:\n${pageErrors.join("\n")}`).toEqual([]);
 });
 
 test("мобильді өлшемде интерфейс қолжетімді (390×844)", async ({ page }) => {

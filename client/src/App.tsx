@@ -11,6 +11,7 @@ import ErrorsPage from "./pages/ErrorsPage";
 import ReportsPage from "./pages/ReportsPage";
 import RubricPage from "./pages/RubricPage";
 import SettingsPage from "./pages/SettingsPage";
+import ComparisonPage from "./pages/ComparisonPage";
 
 function LoginGate({ onLogin }: { onLogin: () => void }) {
   const [token, setTok] = useState("");
@@ -70,6 +71,7 @@ export default function App() {
     { to: "/assignments", label: kz.nav.assignments },
     { to: "/history", label: kz.nav.history },
     { to: "/results", label: kz.nav.results },
+    { to: "/comparison", label: kz.nav.comparison },
     { to: "/errors", label: kz.nav.errors },
     { to: "/reports", label: kz.nav.reports },
     { to: "/rubric", label: kz.nav.rubric },
@@ -103,6 +105,7 @@ export default function App() {
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/results" element={<HistoryPage />} />
           <Route path="/results/:id" element={<ResultPage />} />
+          <Route path="/comparison" element={<ComparisonPage />} />
           <Route path="/errors" element={<ErrorsPage />} />
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/rubric" element={<RubricPage />} />

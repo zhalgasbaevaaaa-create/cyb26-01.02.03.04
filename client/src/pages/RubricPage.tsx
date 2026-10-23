@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { kz, DEFAULT_RUBRIC, validateRubric } from "@gha/shared";
+import { kz, DEFAULT_RUBRIC, DEFAULT_GRADING_BANDS, validateRubric } from "@gha/shared";
 import type { RubricVersion } from "@gha/shared";
 import { ErrorBox, Spinner } from "../components/ui";
 
@@ -24,6 +24,13 @@ export default function RubricPage() {
 
   function setPoints(key: string, value: number) {
     setDraft((d) => d && { ...d, criteria: d.criteria.map((c) => (c.key === key ? { ...c, maxPoints: value } : c)) });
+    setMessage("");
+  }
+
+  const bands = draft.gradingBands ?? DEFAULT_GRADING_BANDS;
+
+  function setBandMin(idx: number, value: number) {
+    setDraft((d) => d && { ...d, gradingBands: (d.gradingBands ?? DEFAULT_GRADING_BANDS).map((b, i) => (i === idx ? { ...b, min: value } : b)) });
     setMessage("");
   }
 
@@ -90,6 +97,23 @@ export default function RubricPage() {
               onChange={(e) => setDraft({ ...draft, provisionalThreshold: Number(e.target.value) / 100 })}
             />
           </div>
+        </div>
+
+        <div className="border-t border-gray-700 pt-3 space-y-2">
+          <h2 className="font-semibold text-sm">{kz.rubric.gradingBands}</h2>
+          <p className="text-xs text-gray-400">{kz.rubric.gradingBandsHint}</p>
+          {bands.map((b, i) => (
+            <div key={b.label} className="flex items-center gap-3">
+              <span className="flex-1 text-sm">{b.label}</span>
+              <span className="text-xs text-gray-400">{kz.rubric.gradingBandFrom}</span>
+              <input
+                type="number" min={0} max={100} className="input w-24 text-right"
+                value={b.min}
+                disabled={b.min === 0 && bands.filter((x) => x.min === 0).length === 1 && i === bands.length - 1}
+                onChange={(e) => setBandMin(i, Number(e.target.value))}
+              />
+            </div>
+          ))}
         </div>
 
         {error && <ErrorBox message={error.message} details={error.details} />}

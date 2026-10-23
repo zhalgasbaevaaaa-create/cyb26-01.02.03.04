@@ -159,10 +159,18 @@
 </div>
 
 <script>
-  // ӘДЕЙІ консоль қатесі (аудитордың қате анықтауын тексеру үшін)
-  console.error("Сынақ үшін әдейі консоль қатесі (fixture)");
+  // ?variant=A..J параметрі арқылы осы бір fixture бірнеше өзін-өзі тексеру
+  // сценарийін (A–J) модельдейді. Параметр берілмесе — ТӨМЕНДЕГІ бастапқы
+  // мінез-құлықтың бәрі өзгеріссіз қалады (қолданыстағы интеграциялық
+  // тесттер дәл осы әдепкі нұсқаға негізделген).
+  var GHA_VARIANT = (new URLSearchParams(location.search).get("variant") || "").toUpperCase();
+  var GHA_FULL = (GHA_VARIANT === "A" || GHA_VARIANT === "J");
+
+  // ӘДЕЙІ консоль қатесі (аудитордың қате анықтауын тексеру үшін) — «толық жұмыс
+  // істейтін» A/J сценарийінде болмауы керек.
+  if (!GHA_FULL) console.error("Сынақ үшін әдейі консоль қатесі (fixture)");
   // ӘДЕЙІ тыйым салынған мекенжайға сұраныс (SSRF-бұғаттауды тексеру үшін)
-  fetch("http://169.254.169.254/latest/meta-data/").catch(function(){});
+  if (!GHA_FULL) fetch("http://169.254.169.254/latest/meta-data/").catch(function(){});
 
   var score = 0, lives = 3, gameStarted = false;
   var canvas = document.getElementById("game");
@@ -241,9 +249,15 @@
       (v.indexOf("1465") >= 0) ? "Дұрыс!" : "Қате. Күтілетін жауап: 1465–1466 жж.";
   });
   document.getElementById("comment-btn").addEventListener("click", function() {
-    // ӘДЕЙİ ОСАЛ: innerHTML — XSS сынағы осы жерді анықтауы керек
-    document.getElementById("comment-out").innerHTML =
-      "Пікір: " + document.getElementById("comment-input").value;
+    var out = document.getElementById("comment-out");
+    var val = document.getElementById("comment-input").value;
+    if (GHA_FULL) {
+      // A/J («толық жұмыс істейтін») сценарийінде input sanitization бар — textContent қауіпсіз.
+      out.textContent = "Пікір: " + val;
+    } else {
+      // ӘДЕЙІ ОСАЛ: innerHTML — XSS сынағы осы жерді анықтауы керек
+      out.innerHTML = "Пікір: " + val;
+    }
   });
   document.getElementById("broken-btn").addEventListener("click", function() {
     throw new Error("Бұзылған батырма (fixture): жоспарланған қате");
@@ -251,6 +265,124 @@
   document.getElementById("google-btn").addEventListener("click", function() {
     alert("Сынақ сайтында нақты Google аутентификациясы жоқ (тек батырма макеті).");
   });
+</script>
+
+<!-- ============================================================
+     ӨЗІН-ӨЗІ ТЕКСЕРУ СЦЕНАРИЙЛЕРІ (?variant=A..J)
+     Master prompt §29 бойынша: бір басқарылатын fixture сайт 10 түрлі
+     бұзылу/толықтық сценарийін модельдейді. variant параметрі болмаса —
+     жоғарыдағы бастапқы мінез-құлық өзгеріссіз қалады (default = бұрынғы
+     интеграциялық тесттер негізделген «ішінара жұмыс істейтін» нұсқа).
+     ============================================================ -->
+<script>
+(function () {
+  var variant = (new URLSearchParams(location.search).get("variant") || "").toUpperCase();
+  if (!variant) return; // параметр жоқ — ештеңе өзгертпейміз
+
+  function byId(id) { return document.getElementById(id); }
+  function removeEl(id) { var el = byId(id); if (el) el.remove(); }
+  function appendHtml(html) {
+    var main = document.querySelector("main");
+    var wrap = document.createElement("div");
+    wrap.innerHTML = html;
+    while (wrap.firstChild) main.appendChild(wrap.firstChild);
+  }
+  // Тыңдаушыларды алып тастау үшін элементті клондап ауыстыру («бұзылған батырма»).
+  function makeInert(id) {
+    var el = byId(id);
+    if (el) el.replaceWith(el.cloneNode(true));
+  }
+
+  var FULL = (variant === "A" || variant === "J"); // A, J — толық жұмыс істейтін жоба (жоғары балл күтіледі)
+
+  if (FULL) {
+    // 6/6 тарихи тапсырма түрі: ④ карта және ⑤ сурет/артефакт тапсырмаларын қосамыз
+    // (әдепкі fixture-де бұлар әдейі жоқ — тек A/J сценарийінде толық жиынтық болады).
+    appendHtml(
+      '<section id="tapsyrma4"><h2>Тарихи тапсырма \u2463 \u2014 карта тапсырмасы</h2>' +
+      "<p>Картадан Қазақ хандығының территориясын және тарихи шайқас болған қаланы анықтаңыз.</p>" +
+      '<button class="opt" id="map-ans">Отырар қаласы</button></section>'
+    );
+    appendHtml(
+      '<section id="tapsyrma5"><h2>Тарихи тапсырма \u2464 \u2014 сурет/артефакт тапсырмасы</h2>' +
+      "<p>Суреттегі тарихи артефакт қай кезеңге жатады? Анықтаңыз:</p>" +
+      '<button class="opt" id="art-ans">Сақтар дәуірі</button></section>'
+    );
+    // Backend қолданысының дәлелі (нақты желілік трафикті имитациялаудың орнына —
+    // честный текстік белгі, себебі fixture ортасында сыртқы backend-ке нақты
+    // қосылу тексерілмейді; бұл PASS емес, тек PARTIAL дәлел береді, бұл дұрыс).
+    // МАҢЫЗДЫ: сөзді бөлшектеп құрастырамыз (G-дегі секрет тәрізді) — себебі
+    // C-BACKEND тексеруі page.content() (скрипт көзін қоса) бойынша сканерлейді;
+    // backend SDK атауының толық жазылуы скрипт мәтінінде тұтас литерал ретінде
+    // кездессе, бұл белгі БАРЛЫҚ нұсқада (variant-сыз әдепкі де қоса) көрінер еді.
+    var beParts = ["Fire", "base ", "Fire", "store"];
+    var beEl = document.createElement("p");
+    beEl.id = "backend-hint";
+    beEl.style.display = "none";
+    beEl.textContent = beParts.join("") + " арқылы нәтижелер сақталады.";
+    document.body.appendChild(beEl);
+    // «Әдейі бұзылған» батырманы алып тастаймыз — A/J нұсқасында ештеңе әдейі бұзылмаған.
+    removeEl("broken-btn");
+  }
+
+  if (variant === "B") {
+    // Google арқылы кіру МҮЛДЕ ЖОҚ
+    removeEl("google-btn");
+  }
+
+  if (variant === "C") {
+    // Тек 3/6 тарихи тапсырма түрі қалады (әдепкі 4-тен тапсырма⑥ алынып тасталады → 1,2,3 қалады)
+    removeEl("tapsyrma6");
+  }
+
+  if (variant === "D") {
+    // Деңгей/кезең чиптерінің бәрін алып тастаймыз (0/10 көрінеді). Ескерту:
+    // «Қазақ хандығы» және «Жоңғар» сөздері басқа тапсырмаларда (tapsyrma1/3)
+    // да кездеседі, сондықтан тек 1-2 чипті алып тастау жеткіліксіз болар еді —
+    // А1-LEVELS тексеруі 5+ дәуір-кілтсөзін табуы мүмкін. Сондықтан толық алып
+    // тастау — нақты «кезеңдер жүйесі дәлелденбеді» жағдайын модельдейді.
+    var levelsBox = document.querySelector(".levels");
+    if (levelsBox) {
+      var chips = levelsBox.querySelectorAll(".chip");
+      for (var i = chips.length - 1; i >= 0; i--) chips[i].remove();
+    }
+  }
+
+  // E — backend мүлде жоқ: әдепкі fixture-дің өзінде нақты backend трафигі/SDK
+  // белгісі жоқ болғандықтан, қосымша өзгерту қажет емес (бұл — E-нің дәл өзі).
+
+  // F — рейтинг кестесі қатаң жазылған (hardcoded): әдепкі кесте де статикалық
+  // сандармен жазылған, сондықтан қосымша өзгерту қажет емес.
+
+  if (variant === "G") {
+    // Клиенттік кодта әдейі «ашылған» құпия кілт (AWS мысал кілті — SECRET_PATTERNS-ке сәйкес).
+    // МАҢЫЗДЫ: жолды бөлшектеп құрастырамыз, себебі C-SEC-CLIENT тексеруі page.content()
+    // (толық HTML, оның ішінде <script> көзі) бойынша сканерлейді — тұтас литерал ретінде
+    // жазылса, бұл «құпия кілт» ӘР нұсқада (variant-қа қарамастан) табылар еді, себебі
+    // скрипт мәтінінің өзі әрдайым бетте болады. Бөлшектеп құрастыру — тек G нұсқасында
+    // шынымен DOM-ға (page.content() нәтижесіне) түсетінін қамтамасыз етеді.
+    var fakeKeyParts = ["AKIA", "IOSFO", "DNN7", "EXAMPLE"];
+    var fakeKey = fakeKeyParts.join("");
+    var secretEl = document.createElement("p");
+    secretEl.id = "leaked-secret";
+    secretEl.style.display = "none";
+    secretEl.textContent = fakeKey;
+    document.body.appendChild(secretEl);
+  }
+
+  if (variant === "H") {
+    // Негізгі батырмалардың бірнешеуі «бұзылған» — басқанда ешқандай күй өзгермейді
+    ["start-btn", "lose-btn", "medic-yes", "medic-no"].forEach(makeInert);
+    document.querySelectorAll("#q1-options .opt").forEach(function (b) { b.replaceWith(b.cloneNode(true)); });
+  }
+
+  if (variant === "I") {
+    // Мобильді нұсқада көлденең тасқын тудыратын қатты ені бекітілген блок
+    var style = document.createElement("style");
+    style.textContent = "#oyin { min-width: 1600px !important; overflow: visible !important; }";
+    document.head.appendChild(style);
+  }
+})();
 </script>
 </body>
 </html>
