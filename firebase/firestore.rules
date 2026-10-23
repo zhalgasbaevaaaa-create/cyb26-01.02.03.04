@@ -1,0 +1,23 @@
+rules_version = '2';
+// Firebase Firestore қауіпсіздік ережелері — GAME HUB PROJECT AUDITOR
+// Ескерту: аудит деректеріне тек сервердің service account-ы жазуы керек.
+// Клиенттік оқу да тек авторизацияланған оқытушыға рұқсат.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Тексеру жазбалары: тек service account (сервер) жазады;
+    // оқытушы токені бар пайдаланушы оқи алады.
+    match /evaluations/{evalId} {
+      allow read: if request.auth != null;
+      allow write: if false; // клиенттен жазу тыйым — тек сервер (Admin SDK ережелерді айналып өтеді)
+    }
+    // Рубрика нұсқалары
+    match /rubrics/{version} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+    // Басқа барлық жолдар тыйым
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

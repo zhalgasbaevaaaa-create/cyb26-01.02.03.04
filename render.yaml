@@ -1,0 +1,20 @@
+# Render.com арқылы тұрақты (публичный) орналастыру конфигурациясы.
+# Пайдалану: Render Dashboard → New → Blueprint → осы репозиторийді таңдаңыз.
+# Render Dockerfile-ды автоматты анықтайды және Node+Playwright ортасын құрастырады.
+services:
+  - type: web
+    name: game-hub-project-auditor
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    envVars:
+      - key: ADMIN_TOKEN
+        generateValue: true
+      - key: ALLOW_LOCALHOST_FOR_TESTS
+        value: "0"
+      - key: PORT
+        value: "8787"
+    disk:
+      name: auditor-data
+      mountPath: /app/data
+      sizeGB: 1

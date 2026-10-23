@@ -1,0 +1,22 @@
+{
+  "name": "game-hub-auditor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GAME HUB PROJECT AUDITOR — студенттік ойын жобаларын автоматты бағалау платформасы",
+  "workspaces": ["shared", "server", "client"],
+  "scripts": {
+    "build:client": "npm run build -w client",
+    "start:server": "npm run start -w server",
+    "dev:server": "npm run dev -w server",
+    "dev:client": "npm run dev -w client",
+    "test:unit": "vitest run --dir tests/unit",
+    "test:integration": "vitest run --dir tests/integration",
+    "test:e2e": "playwright test",
+    "typecheck": "tsc -b shared server client"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="kk">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GAME HUB CYB26-1 (СЫНАҚ САЙТЫ — fixture)</title>
+<style>
+  :root { --gold:#d4af37; --dark:#101828; --panel:#1d2939; --ok:#12b76a; --err:#f04438; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", Arial, sans-serif; margin:0; background:var(--dark); color:#f5f5f5; }
+  header { padding:16px; background:var(--panel); text-align:center; }
+  h1 { margin:0 0 6px; font-size:22px; color:var(--gold); }
+  .fixture-banner { background:#7a2e0e; color:#ffe8d6; padding:6px 10px; font-size:13px; text-align:center; }
+  nav { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; padding:10px; }
+  nav a { color:#cfe3ff; text-decoration:none; border:1px solid #3b4a63; border-radius:8px; padding:6px 10px; font-size:14px; }
+  main { max-width:960px; margin:0 auto; padding:12px; display:flex; flex-direction:column; gap:14px; }
+  section { background:var(--panel); border-radius:12px; padding:14px; }
+  h2 { margin-top:0; font-size:17px; color:var(--gold); }
+  button { background:#2563eb; color:white; border:0; border-radius:8px; padding:8px 14px; font-size:14px; cursor:pointer; margin:3px; }
+  button.secondary { background:#475467; }
+  table { border-collapse:collapse; width:100%; }
+  th, td { border:1px solid #3b4a63; padding:6px 8px; text-align:left; font-size:14px; }
+  .chars, .levels { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip { background:#24344d; border-radius:8px; padding:5px 9px; font-size:13px; }
+  canvas { background:#0b1220; border-radius:10px; display:block; max-width:100%; }
+  .hud { display:flex; gap:14px; font-size:15px; margin:8px 0; flex-wrap:wrap; }
+  .hidden { display:none !important; }
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.7); display:flex; align-items:center; justify-content:center; z-index:50; }
+  .modal-box { background:#1b2637; padding:20px; border-radius:14px; max-width:420px; text-align:center; }
+  #feedback { font-weight:bold; min-height:20px; }
+  input[type=text] { padding:8px; border-radius:8px; border:1px solid #3b4a63; background:#101828; color:#fff; width:100%; max-width:320px; }
+  #comment-out { margin-top:6px; font-size:14px; }
+  footer { text-align:center; padding:14px; font-size:12px; color:#98a2b3; }
+</style>
+</head>
+<body>
+<div class="fixture-banner">⚠ Бұл — аудитормды сынауға арналған БАСҚАРЫЛАТЫН СЫНАҚ САЙТЫ (fixture). Студент жобасы емес. Кейбір мүмкіндіктер әдейі бұзылған.</div>
+<header>
+  <h1>GAME HUB CYB26-01 — ҚАЗАҚСТАН ТАРИХЫ (СЫНАҚ)</h1>
+  <button id="google-btn">Google арқылы кіру</button>
+  <nav>
+    <a href="#reiting">РЕЙТИНГ</a>
+    <a href="#oyindar">ОЙЫНДАР ТІЗІМІ</a>
+    <a href="#profil">ПРОФИЛЬ БАПТАУЛАРЫ</a>
+    <a href="#natizhe">НӘТИЖЕЛЕР</a>
+    <a href="#admin">АДМИН БАПТАУЛАРЫ</a>
+    <a href="#reiting-zhuegi">РЕЙТИНГ ЖҮЙЕСІ</a>
+    <a href="joq-bet.html">Бұзылған сілтеме (сынақ)</a>
+  </nav>
+</header>
+<main>
+  <section id="oyin">
+    <h2>«ҚАЗАҚ ДАЛАСЫНЫҢ ҚОРҒАНЫ» — ойын (сынақ нұсқасы)</h2>
+    <p>Кейіпкер таңдау (10 кейіпкер):</p>
+    <div class="chars">
+      <span class="chip">Томирис</span><span class="chip">Шырақ</span><span class="chip">Күлтегін</span>
+      <span class="chip">Білге қаған</span><span class="chip">Әл-Фараби</span><span class="chip">Қасым хан</span>
+      <span class="chip">Хақназар хан</span><span class="chip">Абылай хан</span><span class="chip">Кенесары хан</span>
+      <span class="chip">Алаш қайраткері</span>
+    </div>
+    <p>Кезеңдер (10 кезең):</p>
+    <div class="levels">
+      <span class="chip">1-кезең: Сақтар</span><span class="chip">2-кезең: Үйсіндер мен қаңлылар</span>
+      <span class="chip">3-кезең: Ғұндар</span><span class="chip">4-кезең: Түрік қағанаты</span>
+      <span class="chip">5-кезең: Қарахан мемлекеті</span><span class="chip">6-кезең: Алтын Орда</span>
+      <span class="chip">7-кезең: Қазақ хандығы</span><span class="chip">8-кезең: Жоңғар шапқыншылығы</span>
+      <span class="chip">9-кезең: Ресей империясы кезеңі</span><span class="chip">10-кезең: Тәуелсіз Қазақстан</span>
+    </div>
+    <p style="font-size:13px;color:#98a2b3">Механика: қарсыластардан қашу, зат жинау, тарихи артефакт табу, кедергілерден өту, бонус алу. Басқару: бағыт пернелері, жылдамдық арттыру — Space.</p>
+    <button id="start-btn">Ойынды бастау</button>
+    <button id="lose-btn" class="secondary hidden">Тест: жеңілу</button>
+    <div class="hud hidden" id="hud">
+      <span>Ұпай: <b id="score">0</b></span>
+      <span>Өмір (жан): <b id="lives">3</b></span>
+      <span>Деңгей: <b id="level">1</b></span>
+    </div>
+    <canvas id="game" class="hidden" width="480" height="220"></canvas>
+  </section>
+
+  <section id="tapsyrma1">
+    <h2>Тарихи тапсырма ① — бір дұрыс жауап (4 нұсқа)</h2>
+    <p id="q1">Қазақ хандығы қай жылы құрылды?</p>
+    <div id="q1-options">
+      <button class="opt">A) 1456</button>
+      <button class="opt">B) 1465</button>
+      <button class="opt">C) 1505</button>
+      <button class="opt">D) 1511</button>
+    </div>
+    <div id="feedback"></div>
+  </section>
+
+  <section id="tapsyrma2">
+    <h2>Тарихи тапсырма ② — сәйкестендіру</h2>
+    <p>Тұлға ↔ оқиға жұптарын сәйкестендіру: Керей хан — хандықтың құрылуы; Тәуке хан — «Жеті жарғы»; Абылай хан — жоңғарларға қарсы күрес.</p>
+  </section>
+
+  <section id="tapsyrma3">
+    <h2>Тарихи тапсырма ③ — хронологиялық рет</h2>
+    <p>Оқиғаларды дұрыс ретке қою: Қазақ хандығының құрылуы → Қасым хан → Тәуке хан → Абылай хан.</p>
+  </section>
+
+  <section id="tapsyrma6">
+    <h2>Тарихи тапсырма ⑥ — бос орынды толтыру</h2>
+    <p>Қазақ хандығы ___ жылы құрылды. (Жауапты енгізіңіз:)</p>
+    <input type="text" id="fill-in" placeholder="Жылды жазыңыз" />
+    <button id="fill-check" class="secondary">Тексеру</button>
+    <div id="fill-feedback"></div>
+  </section>
+
+  <section id="reiting">
+    <h2>РЕЙТИНГ (сынақ деректері)</h2>
+    <table>
+      <thead><tr><th>Орын</th><th>Студент</th><th>Ойын</th><th>Ұпай</th><th>Деңгей</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>Сынақ Студент 1</td><td>Қорғаны</td><td>9500</td><td>10</td></tr>
+        <tr><td>2</td><td>Сынақ Студент 2</td><td>Хан тақты</td><td>8700</td><td>9</td></tr>
+        <tr><td>3</td><td>Сынақ Студент 3</td><td>Арена</td><td>8200</td><td>8</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="oyindar"><h2>ОЙЫНДАР ТІЗІМІ</h2><p>1. «ҚАЗАҚ ДАЛАСЫНЫҢ ҚОРҒАНЫ» (осы бетте, сынақ нұсқасы)</p></section>
+  <section id="profil"><h2>ПРОФИЛЬ БАПТАУЛАРЫ</h2><p>Профиль кіруден кейін қолжетімді (сынақ сайтында аутентификация жоқ).</p></section>
+  <section id="natizhe"><h2>НӘТИЖЕЛЕР</h2><p>Сақталған нәтижелер тізімі (сынақ).</p></section>
+  <section id="admin"><h2>АДМИН БАПТАУЛАРЫ</h2><p>Әкімші панелі (сынақ).</p></section>
+  <section id="reiting-zhuegi"><h2>РЕЙТИНГ ЖҮЙЕСІ</h2><p>Ұпай ережелері: дұрыс жауап +100, қате жауап −10.</p></section>
+
+  <section id="pikir">
+    <h2>Пікір қалдыру (ӘДЕЙІ ОСАЛ — XSS сынағы үшін)</h2>
+    <input type="text" id="comment-input" placeholder="Пікіріңіз..." />
+    <button id="comment-btn" class="secondary">Жіберу</button>
+    <div id="comment-out"></div>
+  </section>
+
+  <section>
+    <h2>Әдейі бұзылған элементтер (fixture)</h2>
+    <button id="broken-btn" class="secondary">Бұзылған батырма (тест)</button>
+    <p style="font-size:13px;color:#98a2b3">Ескерту: бұл сайтта ④ карта тапсырмасы мен ⑤ сурет/артефакт тапсырмасы ӘДЕЙІ ЖОҚ — аудитордың «орындалмады/тексерілмеді» күйлерін ажыратуын тексеру үшін.</p>
+  </section>
+</main>
+<footer>GAME HUB PROJECT AUDITOR — сынақ fixture сайты. Студент жобасы емес.</footer>
+
+<!-- Жеңіліс терезесі («жан біткенде» механикасы) -->
+<div id="lose-modal" class="modal hidden">
+  <div class="modal-box">
+    <h2>СІЗ ЖЕҢІЛДІҢІЗ!</h2>
+    <p>Бірақ тарихи біліміңіз Сізді құтқара алады.<br/>Медициналық көмек қажет пе?</p>
+    <button id="medic-yes">Иә</button>
+    <button id="medic-no" class="secondary">Жоқ</button>
+    <div id="medic-quiz" class="hidden">
+      <p>Тапсырма: «Жеті жарғы» заңдар жинағын қабылдаған хан кім?</p>
+      <button class="medic-opt" data-ok="0">A) Қасым хан</button>
+      <button class="medic-opt" data-ok="1">B) Тәуке хан</button>
+      <button class="medic-opt" data-ok="0">C) Абылай хан</button>
+      <button class="medic-opt" data-ok="0">D) Кенесары хан</button>
+      <div id="medic-feedback"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ӘДЕЙІ консоль қатесі (аудитордың қате анықтауын тексеру үшін)
+  console.error("Сынақ үшін әдейі консоль қатесі (fixture)");
+  // ӘДЕЙІ тыйым салынған мекенжайға сұраныс (SSRF-бұғаттауды тексеру үшін)
+  fetch("http://169.254.169.254/latest/meta-data/").catch(function(){});
+
+  var score = 0, lives = 3, gameStarted = false;
+  var canvas = document.getElementById("game");
+  var ctx = canvas.getContext("2d");
+  var px = 220, py = 110;
+
+  function setScore(v) {
+    score = v;
+    document.getElementById("score").textContent = String(score);
+    try { localStorage.setItem("score", String(score)); } catch(e) {}
+  }
+  function draw() {
+    ctx.clearRect(0,0,480,220);
+    ctx.fillStyle = "#d4af37";
+    ctx.fillRect(px, py, 24, 24);
+    ctx.fillStyle = "#e0e0e0";
+    ctx.font = "12px sans-serif";
+    ctx.fillText("Кейіпкер (бағыт пернелерімен жүреді)", 10, 16);
+  }
+  document.getElementById("start-btn").addEventListener("click", function() {
+    gameStarted = true;
+    canvas.classList.remove("hidden");
+    document.getElementById("hud").classList.remove("hidden");
+    document.getElementById("lose-btn").classList.remove("hidden");
+    draw();
+  });
+  document.addEventListener("keydown", function(e) {
+    if (!gameStarted) return;
+    if (e.key === "ArrowLeft") { px -= 12; setScore(score + 10); }
+    if (e.key === "ArrowRight") { px += 12; setScore(score + 10); }
+    if (e.key === "ArrowUp") { py -= 12; setScore(score + 10); }
+    if (e.key === "ArrowDown") { py += 12; setScore(score + 10); }
+    if (e.key === " ") { setScore(score + 50); }
+    draw();
+  });
+  document.getElementById("lose-btn").addEventListener("click", function() {
+    lives = 0;
+    document.getElementById("lives").textContent = "0";
+    document.getElementById("lose-modal").classList.remove("hidden");
+  });
+  document.getElementById("medic-yes").addEventListener("click", function() {
+    document.getElementById("medic-quiz").classList.remove("hidden");
+  });
+  document.getElementById("medic-no").addEventListener("click", function() {
+    document.getElementById("lose-modal").classList.add("hidden");
+  });
+  document.querySelectorAll(".medic-opt").forEach(function(b) {
+    b.addEventListener("click", function() {
+      var fb = document.getElementById("medic-feedback");
+      if (b.getAttribute("data-ok") === "1") {
+        lives = 1;
+        document.getElementById("lives").textContent = "1";
+        fb.textContent = "Дұрыс! +1 өмір берілді. Ойын жалғасады.";
+        setTimeout(function(){ document.getElementById("lose-modal").classList.add("hidden"); }, 900);
+      } else {
+        fb.textContent = "Қате! Медициналық көмек көрсетілмеді.";
+      }
+    });
+  });
+  document.querySelectorAll("#q1-options .opt").forEach(function(b) {
+    b.addEventListener("click", function() {
+      var fb = document.getElementById("feedback");
+      if (b.textContent.indexOf("1465") >= 0) {
+        fb.textContent = "Дұрыс! +100 ұпай. Қазақ хандығы 1465–1466 жылдары құрылды.";
+        fb.style.color = "#12b76a";
+        setScore(score + 100);
+      } else {
+        fb.textContent = "Қате жауап. Ұпай берілмеді.";
+        fb.style.color = "#f04438";
+      }
+    });
+  });
+  document.getElementById("fill-check").addEventListener("click", function() {
+    var v = document.getElementById("fill-in").value;
+    document.getElementById("fill-feedback").textContent =
+      (v.indexOf("1465") >= 0) ? "Дұрыс!" : "Қате. Күтілетін жауап: 1465–1466 жж.";
+  });
+  document.getElementById("comment-btn").addEventListener("click", function() {
+    // ӘДЕЙİ ОСАЛ: innerHTML — XSS сынағы осы жерді анықтауы керек
+    document.getElementById("comment-out").innerHTML =
+      "Пікір: " + document.getElementById("comment-input").value;
+  });
+  document.getElementById("broken-btn").addEventListener("click", function() {
+    throw new Error("Бұзылған батырма (fixture): жоспарланған қате");
+  });
+  document.getElementById("google-btn").addEventListener("click", function() {
+    alert("Сынақ сайтында нақты Google аутентификациясы жоқ (тек батырма макеті).");
+  });
+</script>
+</body>
+</html>
