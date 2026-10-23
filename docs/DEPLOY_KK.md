@@ -18,6 +18,45 @@ docker run -d --name auditor \
 
 `-v auditor-data:/app/data` — дерекқор, есептер мен скриншоттар контейнер жаңартылғанда сақталады.
 
+## 2.1. Render.com арқылы орналастыру (расталған, нақты жұмыс істейді)
+
+Жүйе **нақты түрде** Render.com-ға (тегін тариф) орналастырылып, тексерілді:
+**https://game-hub-project-auditor.onrender.com**
+
+Қадамдар (Dashboard арқылы қолмен):
+
+1. https://dashboard.render.com → **New** → **Blueprint** → GitHub репозиторийін қосыңыз (`projecttime`) → Render реподағы `render.yaml`-ды автоматты табады.
+2. `render.yaml`-дағы әдепкі `plan: starter` + тұрақты диск — **ТӨЛЕМДІ талап етеді** (картасыз 402 қатесі шығады, API арқылы да, Dashboard арқылы да). Тегін тестілеу үшін блюпринтті қолданбай, қолмен **New → Web Service** жасап, «env: Docker», «Plan: Free», дискісіз орнатыңыз (төменде API мысалы да осылай).
+3. Айнымалылар: `ADMIN_TOKEN` (Render өзі «Generate» арқылы жасай алады), `ALLOW_LOCALHOST_FOR_TESTS=0`, `PORT=8787`.
+4. Deploy аяқталған соң Render берген URL бойынша `/api/system/info` ашылатынын тексеріңіз.
+
+API арқылы (автоматтандыру үшін, Render API кілті керек):
+
+```bash
+curl -X POST https://api.render.com/v1/services \
+  -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" \
+  -d '{
+    "type": "web_service",
+    "name": "game-hub-project-auditor",
+    "ownerId": "<GET /v1/owners арқылы алыңыз>",
+    "repo": "https://github.com/zhalgasbaevaaaa-create/projecttime",
+    "branch": "main",
+    "serviceDetails": {
+      "env": "docker", "plan": "free", "region": "oregon",
+      "envSpecificDetails": { "dockerfilePath": "./Dockerfile", "dockerContext": "." }
+    },
+    "envVars": [
+      { "key": "ADMIN_TOKEN", "generateValue": true },
+      { "key": "ALLOW_LOCALHOST_FOR_TESTS", "value": "0" },
+      { "key": "PORT", "value": "8787" }
+    ]
+  }'
+```
+
+⚠️ **Тегін тарифтің шектеуі (расталған):** диск тіркелмегендіктен, дерекқор (`data/db.json`) мен есептер/дәлелдемелер контейнер **әр қайта іске қосылғанда/жаңа деплойда жоғалады** (эфемерлі файл жүйесі), әрі қызмет 15 минут белсенсіздіктен кейін ұйықтайды (бірінші сұраныс ~30–50 сек.). Нақты оқу процесінде деректерді сақтау қажет болса — `https://dashboard.render.com/billing` бетінде төлем картасын қосып, `render.yaml`-дағы `plan: starter` + `disk` конфигурациясын қолданыңыз (сонда диск `/app/data`-ны тұрақты сақтайды).
+
+**Ескерту (түзетілген ақаулар, болашақта қайталанбас үшін):** Dockerfile-дегі `FROM mcr.microsoft.com/playwright:...` нұсқасы әрқашан `server/package.json`-дағы `playwright` npm нұсқасымен **дәл сәйкес** болуы керек (екеуі сәйкессіз болса, браузер контейнерде табылмайды). PDF есебінің қазақша қаріптері (`server/assets/fonts/DejaVuSans*.ttf`) репозиторийге салынған — олар ОС-тің жүйелік қаріптеріне тәуелді емес, сондықтан кез келген Docker base image-де жұмыс істейді.
+
 ## 3. VPS-ке қолмен орналастыру
 
 ```bash
