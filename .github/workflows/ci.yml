@@ -1,0 +1,38 @@
+name: CI — GAME HUB PROJECT AUDITOR
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Тәуелділіктерді орнату
+        run: npm install --no-audit --no-fund
+
+      - name: TypeScript тексеруі
+        run: npm run typecheck
+
+      - name: Бірлік тестілер
+        run: npm run test:unit
+
+      - name: Playwright Chromium орнату
+        run: npx playwright install --with-deps chromium
+
+      - name: Интеграциялық тестілер (нақты браузер + fixture)
+        run: npm run test:integration
+
+      - name: Клиентті құрастыру
+        run: npm run build -w client
+
+      - name: E2E тестілер (Playwright)
+        run: npm run test:e2e
