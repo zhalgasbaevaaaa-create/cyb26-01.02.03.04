@@ -161,8 +161,14 @@ export async function generatePdfReport(rec: EvaluationRecord, assignmentTitle: 
 
     // ===== 8. GAMEPLAY FINDINGS =====
     H1(kz.report.section8);
-    const gameplayIds = new Set(["A1-MECH", "A2-MAP", "A3-TARGETS", "A4-RACE", "A5-MATCH", "A6-PUZZLES", "C-ALGO", "C-DIFF", "C-LIVES"]);
-    const gameplayTests = rec.tests.filter((t) => gameplayIds.has(t.requirementId) || t.requirementId.endsWith("-LEVELS") || t.requirementId.endsWith("-MECH"));
+    const gameplayIds = new Set([
+      "A1-MECH", "A2-MAP", "A3-TARGETS", "A4-RACE", "A5-MATCH", "A6-PUZZLES", "C-ALGO", "C-DIFF", "C-LIVES",
+      // «Басқа ойын түрі» режиміне тән қосымша тексерулер (§ Генерик профиль):
+      "OTHER-STAGE-LOGIC", "OTHER-COMPLEXITY", "OTHER-SCORE-SYSTEM", "OTHER-SCORE-ACCURACY",
+    ]);
+    const gameplayTests = rec.tests.filter(
+      (t) => gameplayIds.has(t.requirementId) || t.requirementId.endsWith("-LEVELS") || t.requirementId.endsWith("-MECH") || t.requirementId.endsWith("-CHARS"),
+    );
     if (gameplayTests.length === 0) P(kz.report.noneFound);
     gameplayTests.forEach((t) => {
       doc.font("kk-bold").fontSize(9).text(`• ${t.name} [${STATUS_KK[t.status]}]`);

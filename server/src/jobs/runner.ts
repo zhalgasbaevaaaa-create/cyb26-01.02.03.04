@@ -51,6 +51,7 @@ export async function createAudit(
     repositoryUrl: req.repositoryUrl?.trim() || undefined,
     assignmentId: req.assignmentId,
     instructorNotes: req.instructorNotes?.trim() || undefined,
+    customSpecText: req.customSpecText?.trim() || undefined,
     createdAt: new Date().toISOString(),
     status: "queued",
     stages: makeStages(),

@@ -8,7 +8,7 @@ import { CONFIG } from "../config.js";
 import { isRequestHostAllowed, validateUrl } from "@gha/shared/src/urlSecurity.js";
 import type { EvaluationRecord, JobStage, Requirement, TestResult, TestStatus, ModuleSettings, TestModuleKey } from "@gha/shared";
 import { DEFAULT_MODULE_SETTINGS } from "@gha/shared";
-import { PROFILES, TASK_TYPE_KEYWORDS, LIVES_KEYWORDS, HUB_KEYWORDS, GOOGLE_LOGIN_KEYWORDS } from "./profiles.js";
+import { PROFILES, TASK_TYPE_KEYWORDS, LIVES_KEYWORDS, HUB_KEYWORDS, GOOGLE_LOGIN_KEYWORDS, extractSpecKeywords, type ProfileChecks } from "./profiles.js";
 import { loadAnswerKey, compareAgainstKey } from "./answerKey.js";
 import { AxeBuilder } from "@axe-core/playwright";
 
@@ -164,7 +164,16 @@ export async function runBrowserTests(
   onStage: (key: string, status: JobStage["status"]) => Promise<void>,
   moduleSettings: ModuleSettings = DEFAULT_MODULE_SETTINGS,
 ): Promise<ExecutorResult> {
-  const assignment = { A1: "action_arcade_survival", A2: "strategy_tower_defense", A3: "shooter_quiz", A4: "racing_quiz", A5: "match3_puzzle_rpg", A6: "adventure_escape" }[assignmentId] ?? "action_arcade_survival";
+  const assignment =
+    ({
+      A1: "action_arcade_survival",
+      A2: "strategy_tower_defense",
+      A3: "shooter_quiz",
+      A4: "racing_quiz",
+      A5: "match3_puzzle_rpg",
+      A6: "adventure_escape",
+      OTHER: "custom_generic",
+    } as Record<string, string>)[assignmentId] ?? "custom_generic";
   const res: ExecutorResult = {
     tests: [],
     securityWarnings: [],
@@ -177,7 +186,26 @@ export async function runBrowserTests(
     loadFailed: false,
   };
   const ctx: Ctx = { res, rec, profileKey: assignment, pageText: "", screenshotCount: 0, networkLog: [] };
-  const profile = PROFILES[assignment];
+  const baseProfile = PROFILES[assignment];
+  // «Басқа ойын түрі» үшін: еркін техникалық тапсырма мәтінінен алынған ықтимал
+  // кейіпкер/кезең/механика атауларын жалпы индикаторлар тізіміне қосамыз
+  // (А1–А6-дағы бекітілген тізім болмағандықтан — бұл қосымша, бірақ дәлме-дәл емес дәлел көзі).
+  const profile: ProfileChecks =
+    assignment === "custom_generic" && rec.customSpecText
+      ? (() => {
+          const extra = extractSpecKeywords(rec.customSpecText!);
+          if (extra.length === 0) return baseProfile;
+          res.limitations.push(
+            `«Басқа ойын түрі» режимі: техникалық тапсырма мәтінінен ${extra.length} ықтимал кілт сөз/тіркес алынды және кейіпкер/кезең/механика тексерулеріне қосымша дәлел ретінде қолданылды: ${extra.slice(0, 15).join(", ")}${extra.length > 15 ? "…" : ""}.`,
+          );
+          return {
+            ...baseProfile,
+            characters: [...baseProfile.characters, ...extra],
+            levels: [...baseProfile.levels, ...extra],
+            mechanics: [...baseProfile.mechanics, ...extra],
+          };
+        })()
+      : baseProfile;
   const opts = { allowLocalhostForTests: CONFIG.allowLocalhostForTests };
 
   // Әкімші бұл тест модулін өшірген бе? Өшірілсе — тиісті талаптарға еш тест
@@ -451,6 +479,13 @@ export async function runBrowserTests(
     if (isModuleEnabled("levels")) {
       await onStage("levels", "running");
       await checkLevels(page, ctx, profile, assignmentId);
+      // «Басқа ойын түрі» үшін ғана: кезеңдер арасындағы логикалық байланыс пен
+      // ойынның жалпы күрделілігі (А1–А6-ға бұл қосымша тексерулер жоқ — олардың
+      // рубрикасы PDF-тен алынған нақты талаптармен шектеледі).
+      if (assignment === "custom_generic") {
+        await checkStageLogic(page, ctx);
+        await checkComplexity(page, ctx);
+      }
       await onStage("levels", "done");
     } else {
       await skipModule("levels", STAGE_LABELS.levels);
@@ -481,6 +516,12 @@ export async function runBrowserTests(
     if (isModuleEnabled("gamehub")) {
       await onStage("gamehub", "running");
       await checkGameHub(page, ctx);
+      // «Басқа ойын түрі» үшін ғана: ұпай беру жүйесі және ұпай есептеудің
+      // қайталанушылығы (детерминизмі) — А1–А6 ойындарында бұл C-HUB-RATING
+      // тестімен жабылады, бірақ ол кестенің болуын ғана тексереді.
+      if (assignment === "custom_generic") {
+        await checkScoreSystemGeneric(page, ctx);
+      }
       await onStage("gamehub", "done");
     } else {
       await skipModule("gamehub", STAGE_LABELS.gamehub);
@@ -667,6 +708,186 @@ async function checkCoreMechanics(page: Page, ctx: Ctx, profile: (typeof PROFILE
     });
   }
   ctx.res.tests.push(tAlgo);
+}
+
+// ---------- «Басқа ойын түрі» (custom_generic) үшін қосымша тексерулер ----------
+// Бұл үш функция тек assignmentId === "OTHER" болғанда шақырылады (жоғарыдағы
+// `if (assignment === "custom_generic")` шарттары арқылы). А1–А6 тапсырмаларының
+// мінез-құлқына ЕШҚАНДАЙ әсер етпейді.
+
+/** OTHER-STAGE-LOGIC: кезеңдер арасындағы логикалық байланыс (бос black-box дәлел). */
+async function checkStageLogic(page: Page, ctx: Ctx): Promise<void> {
+  const t = newTest("OTHER-STAGE-LOGIC", "Кезеңдер арасындағы логикалық байланыс");
+  t.expected = "Әртүрлі кезең/деңгей ашылғанда мазмұны нақты ерекшеленеді (бірдей экран қайталанбайды)";
+  const levelEls = page
+    .locator("[class*='level' i]:visible, [class*='kez' i]:visible, [data-level]:visible, a:visible, button:visible")
+    .filter({ hasText: /деңгей|level|кезең|stage|бөлім|round|раунд/i });
+  const count = await levelEls.count();
+  t.actions.push(`Кезең/деңгей сілтейтін элементтер табылды: ${count}`);
+  if (count < 2) {
+    finish(t, "NOT_VERIFIED", "Кемінде екі бөлек кезең элементі табылмады — кезеңдер арасындағы байланысты автоматты тексеру мүмкін болмады", {
+      limitations: "Бұл тексеру тек кемінде екі қолжетімді кезең/деңгей сілтемесі табылғанда жүргізіледі.",
+    });
+    ctx.res.tests.push(t);
+    return;
+  }
+  try {
+    const before = await safeInnerText(page);
+    await levelEls.nth(0).click({ timeout: 3000 }).catch(() => undefined);
+    await page.waitForTimeout(600);
+    const first = await safeInnerText(page);
+    await page.goBack({ timeout: 4000 }).catch(() => undefined);
+    await page.waitForTimeout(400);
+    const freshLevelEls = page
+      .locator("[class*='level' i]:visible, [class*='kez' i]:visible, [data-level]:visible, a:visible, button:visible")
+      .filter({ hasText: /деңгей|level|кезең|stage|бөлім|round|раунд/i });
+    await freshLevelEls.nth(1).click({ timeout: 3000 }).catch(() => undefined);
+    await page.waitForTimeout(600);
+    const second = await safeInnerText(page);
+    const shot = await takeScreenshot(page, ctx, "kezender-baylanys");
+    const distinctFromHome = first !== before || second !== before;
+    const distinctFromEachOther = first !== second;
+    t.actions.push(
+      `1-кезең ашылғаннан кейінгі мәтін ${first === before ? "басты беттен өзгермеді" : "өзгерді"}; 2-кезең ${second === first ? "1-кезеңмен бірдей" : "ерекшеленеді"}`,
+    );
+    if (distinctFromEachOther && distinctFromHome) {
+      finish(t, "PASS", "Әртүрлі кезеңдер ашылғанда мазмұн нақты ерекшеленеді — логикалық байланыс белгісі бар", { screenshot: shot });
+    } else if (distinctFromHome) {
+      finish(t, "PARTIAL", "Кезеңдер ашылады, бірақ екі кезеңнің мазмұны бірдей болып көрінді", {
+        screenshot: shot,
+        limitations: "Кезеңдердің ішкі мазмұны нақты бөлек пе, әлде бір шаблон ма — анық емес.",
+      });
+    } else {
+      finish(t, "FAIL", "Кезең элементтерін басқанда мазмұн өзгермеді", { screenshot: shot });
+    }
+  } catch (e) {
+    finish(t, "NOT_VERIFIED", `Кезеңдерді салыстыру әрекеті сәтсіз аяқталды: ${String(e).slice(0, 150)}`);
+  }
+  ctx.res.tests.push(t);
+}
+
+/** OTHER-COMPLEXITY: ойынның күрделілігі — тек объективті өлшенетін прокси-сигналдар. */
+async function checkComplexity(page: Page, ctx: Ctx): Promise<void> {
+  const t = newTest("OTHER-COMPLEXITY", "Ойынның күрделілігі (өлшенетін прокси-көрсеткіштер)");
+  t.expected = "Бірнеше өзара тәуелді ішкі жүйе байқалады (кейіпкер + кезең + механика + тапсырма түрлері + графика)";
+  const has = (id: string) => ctx.res.tests.some((x) => x.requirementId === id && (x.status === "PASS" || x.status === "PARTIAL"));
+  const taskTypesFound = ctx.res.tests.filter((x) => /^C-TASK-\d/.test(x.requirementId) && (x.status === "PASS" || x.status === "PARTIAL")).length;
+  const canvasCount = await page.locator("canvas:visible").count();
+  const signals = {
+    characters: has("OTHER-CHARS") ? 1 : 0,
+    levels: has("OTHER-LEVELS") ? 1 : 0,
+    mechanics: has("OTHER-MECH") ? 1 : 0,
+    taskTypes: taskTypesFound >= 2 ? 1 : 0,
+    canvas: canvasCount > 0 ? 1 : 0,
+  };
+  const signalCount = Object.values(signals).reduce((a, b) => a + b, 0);
+  t.actions.push(
+    `Сигналдар: кейіпкер=${signals.characters}, кезең=${signals.levels}, механика=${signals.mechanics}, тапсырма түрлері(≥2 табылды: ${taskTypesFound})=${signals.taskTypes}, canvas(${canvasCount})=${signals.canvas} → жиыны ${signalCount}/5`,
+  );
+  if (signalCount >= 4) {
+    finish(t, "PASS", `${signalCount}/5 күрделілік сигналы табылды — ойын бірнеше өзара әрекеттесетін ішкі жүйеден тұрады`, {
+      limitations: "Бұл тек объективті өлшенетін прокси-көрсеткіш, толық сараптамалық бағалау емес.",
+    });
+  } else if (signalCount >= 2) {
+    finish(t, "PARTIAL", `${signalCount}/5 күрделілік сигналы ғана табылды`, {
+      limitations: "Қалған сигналдар табылмады немесе тексерілмеді.",
+    });
+  } else {
+    finish(t, "NOT_VERIFIED", `Тек ${signalCount}/5 сигнал табылды — күрделілік туралы сенімді қорытынды жасауға жеткіліксіз дәлел`, {
+      limitations: "Жеткіліксіз дәлел «қарапайым» дегенді білдірмейді — тек автоматты түрде анықталмады.",
+    });
+  }
+  ctx.res.tests.push(t);
+}
+
+const SCORE_REGEX = /(ұпай|score|points?|нәтиже)[^\d\n]{0,12}(-?\d[\d\s]{0,7})/i;
+
+function extractScoreValue(text: string): number | null {
+  const m = text.match(SCORE_REGEX);
+  if (!m) return null;
+  const n = Number(m[2].replace(/\s/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+/** OTHER-SCORE-SYSTEM + OTHER-SCORE-ACCURACY: ұпай беру жүйесі және оның қайталанушылығы. */
+async function checkScoreSystemGeneric(page: Page, ctx: Ctx): Promise<void> {
+  const tSys = newTest("OTHER-SCORE-SYSTEM", "Ұпай беру жүйесінің болуы");
+  tSys.expected = "Бетте ұпай/нәтиже элементі бар және ойыншы әрекетінен кейін мәні өзгереді";
+  const before = await safeInnerText(page);
+  const beforeScore = extractScoreValue(before);
+  tSys.actions.push(`Әрекет алдындағы ұпай мәні: ${beforeScore ?? "табылмады"}`);
+  const actionEl = page.locator("button:visible, [role='button']:visible, canvas:visible, a:visible").first();
+  let clicked = false;
+  try {
+    if (await actionEl.count()) {
+      await actionEl.click({ timeout: 3000 });
+      clicked = true;
+      await page.waitForTimeout(700);
+    }
+  } catch { /* клик сәтсіз болса — төменде NOT_VERIFIED/FAIL-мен есепке алынады */ }
+  const after = await safeInnerText(page);
+  const afterScore = extractScoreValue(after);
+  tSys.actions.push(`Әрекет (${clicked ? "клик жасалды" : "клик мүмкін болмады"}) кейінгі ұпай мәні: ${afterScore ?? "табылмады"}`);
+  const shot = await takeScreenshot(page, ctx, "upai-zhuyesi");
+  const delta1 = beforeScore !== null && afterScore !== null ? afterScore - beforeScore : null;
+
+  if (beforeScore === null && afterScore === null) {
+    finish(tSys, "NOT_VERIFIED", "Бетте ұпай/нәтиже көрсеткіші табылмады", {
+      screenshot: shot,
+      limitations: "Ұпай элементі басқа бетте/модальда болуы мүмкін — тек басты бетте ізделді.",
+    });
+    ctx.res.tests.push(tSys);
+    const tAcc = newTest("OTHER-SCORE-ACCURACY", "Ұпай есептеудің дәлдігі/тұрақтылығы");
+    finish(tAcc, "NOT_VERIFIED", "Ұпай элементі табылмағандықтан, есептеудің қайталанушылығын тексеру мүмкін болмады");
+    ctx.res.tests.push(tAcc);
+    return;
+  }
+  if (delta1 !== null && delta1 !== 0) {
+    finish(tSys, "PASS", `Әрекеттен кейін ұпай ${beforeScore} → ${afterScore} (Δ${delta1 > 0 ? "+" : ""}${delta1}) өзгерді`, { screenshot: shot });
+  } else if (afterScore !== null) {
+    finish(tSys, "PARTIAL", `Ұпай көрсеткіші бар (${afterScore}), бірақ бір клик әрекетінен кейін өзгеріс байқалмады`, {
+      screenshot: shot,
+      limitations: "Ұпай белгілі бір дұрыс жауаптан кейін ғана өзгеруі мүмкін — жалпы клик жеткіліксіз болуы ықтимал.",
+    });
+  } else {
+    finish(tSys, "NOT_VERIFIED", "Ұпай мәні анықталды, бірақ әрекеттен кейінгі мәнді оқу мүмкін болмады", { screenshot: shot });
+  }
+  ctx.res.tests.push(tSys);
+
+  // Қайталанушылық/детерминизм: бетті қайта жүктеп, сол бірінші әрекетті қайталау
+  const tAcc = newTest("OTHER-SCORE-ACCURACY", "Ұпай есептеудің дәлдігі/тұрақтылығы");
+  tAcc.expected = "Бірдей әрекетті жаңа сессияда қайталағанда ұпай өзгерісі бірдей болады";
+  if (delta1 === null || delta1 === 0) {
+    finish(tAcc, "NOT_VERIFIED", "Алғашқы әрекетте нақты ұпай өзгерісі тіркелмегендіктен, қайталанушылықты тексеру мүмкін болмады", {
+      limitations: "Бұл тест тек бірінші әрекеттен нақты, нөлдік емес ұпай өзгерісі тіркелгенде жүргізіледі.",
+    });
+    ctx.res.tests.push(tAcc);
+    return;
+  }
+  try {
+    await page.reload({ timeout: 15000, waitUntil: "domcontentloaded" }).catch(() => undefined);
+    await page.waitForTimeout(800);
+    const before2 = await safeInnerText(page);
+    const beforeScore2 = extractScoreValue(before2);
+    const actionEl2 = page.locator("button:visible, [role='button']:visible, canvas:visible, a:visible").first();
+    if (await actionEl2.count()) await actionEl2.click({ timeout: 3000 }).catch(() => undefined);
+    await page.waitForTimeout(700);
+    const after2 = await safeInnerText(page);
+    const afterScore2 = extractScoreValue(after2);
+    const delta2 = beforeScore2 !== null && afterScore2 !== null ? afterScore2 - beforeScore2 : null;
+    tAcc.actions.push(`1-сынақ Δ=${delta1}; 2-сынақ (бетті қайта жүктегеннен кейін) Δ=${delta2 ?? "анықталмады"}`);
+    const shot2 = await takeScreenshot(page, ctx, "upai-tuyraqtylyk");
+    if (delta2 !== null && delta2 === delta1) {
+      finish(tAcc, "PASS", `Екі сынақта да ұпай өзгерісі бірдей болды (Δ${delta1}) — есептеу тұрақты/детерминистік болып көрінеді`, { screenshot: shot2 });
+    } else if (delta2 !== null) {
+      finish(tAcc, "FAIL", `Ұпай өзгерісі сынақтар арасында сәйкес келмеді: 1-сынақ Δ${delta1}, 2-сынақ Δ${delta2}`, { screenshot: shot2 });
+    } else {
+      finish(tAcc, "NOT_VERIFIED", "Екінші сынақта ұпай мәнін қайта оқу мүмкін болмады", { screenshot: shot2 });
+    }
+  } catch (e) {
+    finish(tAcc, "NOT_VERIFIED", `Қайталау сынағы сәтсіз аяқталды: ${String(e).slice(0, 150)}`);
+  }
+  ctx.res.tests.push(tAcc);
 }
 
 async function checkTaskTypes(page: Page, ctx: Ctx): Promise<void> {

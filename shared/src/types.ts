@@ -124,6 +124,7 @@ export interface EvaluationRecord {
   repositoryUrl?: string;
   assignmentId: string;
   instructorNotes?: string;
+  customSpecText?: string;         // «Басқа ойын түрі» үшін еркін техникалық тапсырма мәтіні
   createdAt: string;
   finishedAt?: string;
   status: JobStatus;
@@ -176,4 +177,11 @@ export interface AuditRequest {
   repositoryUrl?: string;
   assignmentId: string;
   instructorNotes?: string;
+  /**
+   * assignmentId === "OTHER" («Басқа ойын түрі») болғанда толтырылатын еркін
+   * техникалық тапсырма мәтіні. Оқытушы/студент сипаттаған кейіпкер/кезең
+   * атаулары мен ойын тақырыбы автоматты тексеруде қосымша кілт сөз ретінде
+   * қолданылады (бекітілген 6 тапсырымдағыдай нақты тізім болмағандықтан).
+   */
+  customSpecText?: string;
 }

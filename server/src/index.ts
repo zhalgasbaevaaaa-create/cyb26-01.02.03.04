@@ -55,14 +55,27 @@ export function createApp() {
   });
 
   // ===== Тексерулер =====
-  const auditSchema = z.object({
-    studentName: z.string().trim().min(2, "Студенттің аты-жөні кемінде 2 таңба болуы керек"),
-    groupName: z.string().trim().min(2, "Оқу тобы кемінде 2 таңба болуы керек"),
-    projectUrl: z.string().trim().min(8, "Жоба сілтемесі тым қысқа"),
-    repositoryUrl: z.string().trim().optional().or(z.literal("")),
-    assignmentId: z.enum(["A1", "A2", "A3", "A4", "A5", "A6"], { message: "Техникалық тапсырманы таңдаңыз (A1–A6)" }),
-    instructorNotes: z.string().trim().max(2000).optional().or(z.literal("")),
-  });
+  const auditSchema = z
+    .object({
+      studentName: z.string().trim().min(2, "Студенттің аты-жөні кемінде 2 таңба болуы керек"),
+      groupName: z.string().trim().min(2, "Оқу тобы кемінде 2 таңба болуы керек"),
+      projectUrl: z.string().trim().min(8, "Жоба сілтемесі тым қысқа"),
+      repositoryUrl: z.string().trim().optional().or(z.literal("")),
+      assignmentId: z.enum(["A1", "A2", "A3", "A4", "A5", "A6", "OTHER"], {
+        message: "Техникалық тапсырманы таңдаңыз (A1–A6 немесе «Басқа ойын түрі»)",
+      }),
+      customSpecText: z.string().trim().max(8000).optional().or(z.literal("")),
+      instructorNotes: z.string().trim().max(2000).optional().or(z.literal("")),
+    })
+    .superRefine((val, ctx) => {
+      if (val.assignmentId === "OTHER" && (!val.customSpecText || val.customSpecText.trim().length < 10)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["customSpecText"],
+          message: "«Басқа ойын түрі» таңдалғанда техникалық тапсырма мәтінін (кемінде 10 таңба) енгізу керек.",
+        });
+      }
+    });
 
   app.post("/api/audits", requireAuth(), async (req, res) => {
     const parsed = auditSchema.safeParse(req.body);

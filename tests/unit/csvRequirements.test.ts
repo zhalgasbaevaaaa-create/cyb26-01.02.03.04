@@ -27,9 +27,9 @@ describe("CSV экрандау", () => {
 });
 
 describe("талаптар матрицасы (PDF дереккөзі)", () => {
-  it("6 тапсырма бар", () => {
-    expect(ASSIGNMENTS).toHaveLength(6);
-    expect(ASSIGNMENTS.map((a) => a.id)).toEqual(["A1", "A2", "A3", "A4", "A5", "A6"]);
+  it("6 бекітілген тапсырма + 1 еркін («Басқа ойын түрі») бар", () => {
+    expect(ASSIGNMENTS).toHaveLength(7);
+    expect(ASSIGNMENTS.map((a) => a.id)).toEqual(["A1", "A2", "A3", "A4", "A5", "A6", "OTHER"]);
   });
   it("ортақ талаптар әр тапсырмаға кіреді", () => {
     const common = REQUIREMENTS.filter((r) => r.assignmentId === "COMMON");

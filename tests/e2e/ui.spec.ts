@@ -52,7 +52,15 @@ test("кіру, аудит бастау, нәтиже беті және қаза
   await page.locator("button", { hasText: "Тексеруді бастау" }).click();
   await expect(page.locator("text=Жарамды http:// немесе https:// сілтемесін енгізіңіз")).toBeVisible();
 
-  // 5. Нақты аудит (fixture)
+  // 4b. «Басқа ойын түрі» (OTHER) — жаңа еркін техникалық тапсырма режимі
+  await page.locator("select").selectOption("OTHER");
+  await expect(page.locator("text=Техникалық тапсырма мәтіні")).toBeVisible();
+  await page.locator("button", { hasText: "Тексеруді бастау" }).click();
+  await expect(page.locator("text=«Басқа ойын түрі» таңдалғанда техникалық тапсырма мәтінін")).toBeVisible();
+  await page.locator("textarea").first().fill("Ойын «Томирис» кейіпкеріне негізделген, 5 кезеңнен тұрады.");
+  await expect(page.locator("text=«Басқа ойын түрі» таңдалғанда техникалық тапсырма мәтінін")).not.toBeVisible();
+
+  // 5. Нақты аудит (fixture) — А1 профиліне қайта ауысып, толық құбырды тексереміз
   await page.locator("input[placeholder='https://...']").fill("http://127.0.0.1:8788/fixture/");
   await page.locator("select").selectOption("A1");
   await page.locator("button", { hasText: "Тексеруді бастау" }).click();

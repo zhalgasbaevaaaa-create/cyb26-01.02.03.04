@@ -10,13 +10,14 @@ interface FormState {
   projectUrl: string;
   repositoryUrl: string;
   assignmentId: string;
+  customSpecText: string;
   instructorNotes: string;
 }
 
 export default function NewAuditPage() {
   const navigate = useNavigate();
   const [form, setForm] = useState<FormState>({
-    studentName: "", groupName: "", projectUrl: "", repositoryUrl: "", assignmentId: "", instructorNotes: "",
+    studentName: "", groupName: "", projectUrl: "", repositoryUrl: "", assignmentId: "", customSpecText: "", instructorNotes: "",
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [serverError, setServerError] = useState<{ message: string; details?: string[] } | null>(null);
@@ -46,6 +47,9 @@ export default function NewAuditPage() {
       }
     }
     if (!form.assignmentId) e.assignmentId = kz.form.selectAssignment;
+    if (form.assignmentId === "OTHER" && form.customSpecText.trim().length < 10) {
+      e.customSpecText = kz.form.customSpecRequired;
+    }
     if (form.repositoryUrl.trim()) {
       try { new URL(form.repositoryUrl.trim()); } catch { e.repositoryUrl = kz.form.invalidUrl; }
     }
@@ -65,6 +69,7 @@ export default function NewAuditPage() {
         projectUrl: form.projectUrl.trim(),
         repositoryUrl: form.repositoryUrl.trim() || undefined,
         assignmentId: form.assignmentId,
+        customSpecText: form.assignmentId === "OTHER" ? form.customSpecText.trim() : undefined,
         instructorNotes: form.instructorNotes.trim() || undefined,
       });
       navigate(`/results/${res.id}`);
@@ -106,12 +111,27 @@ export default function NewAuditPage() {
           <label className="label">{kz.form.assignment} *</label>
           <select className="input" value={form.assignmentId} onChange={(e) => set("assignmentId", e.target.value)}>
             <option value="">— {kz.form.selectAssignment} —</option>
-            {ASSIGNMENTS.map((a) => (
+            {ASSIGNMENTS.filter((a) => a.id !== "OTHER").map((a) => (
               <option key={a.id} value={a.id}>{a.id}. {a.title} ({a.genre})</option>
             ))}
+            <option value="OTHER">— {kz.form.otherGameOption} —</option>
           </select>
           {errors.assignmentId && <p className="text-xs text-red-400 mt-1">{errors.assignmentId}</p>}
         </div>
+        {form.assignmentId === "OTHER" && (
+          <div>
+            <label className="label">{kz.form.customSpecLabel} *</label>
+            <textarea
+              className="input"
+              rows={6}
+              value={form.customSpecText}
+              onChange={(e) => set("customSpecText", e.target.value)}
+              placeholder={kz.form.customSpecPlaceholder}
+            />
+            {errors.customSpecText && <p className="text-xs text-red-400 mt-1">{errors.customSpecText}</p>}
+            <p className="text-xs text-gray-400 mt-1">{kz.form.customSpecHint}</p>
+          </div>
+        )}
         <div>
           <label className="label">{kz.form.instructorNotes}</label>
           <textarea className="input" rows={3} value={form.instructorNotes} onChange={(e) => set("instructorNotes", e.target.value)} />
