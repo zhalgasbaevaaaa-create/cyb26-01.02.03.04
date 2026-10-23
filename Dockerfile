@@ -1,6 +1,6 @@
 # GAME HUB PROJECT AUDITOR — өндірістік Docker бейнесі
 # Ресми Playwright негізі (Chromium + жүйелік тәуелділіктер орнатылған)
-FROM mcr.microsoft.com/playwright:v1.48.0-jammy
+FROM mcr.microsoft.com/playwright:v1.64.1-jammy
 
 WORKDIR /app
 
