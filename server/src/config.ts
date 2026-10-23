@@ -18,6 +18,10 @@ export const CONFIG = {
   evidenceDir: resolveFromRoot(process.env.EVIDENCE_DIR ?? "data/evidence"),
   clientDist: resolveFromRoot(process.env.CLIENT_DIST ?? "client/dist"),
   fixtureDir: resolveFromRoot(process.env.FIXTURE_DIR ?? "fixtures/test-site"),
+  // PDF есебі үшін қазақша Unicode қаріптер (репозиторийге салынған — ОС-тің
+  // жүйелік қаріптеріне (мыс. DejaVu) тәуелді болмау үшін, Docker image-і
+  // ауысқанда (мыс. Playwright base image жаңартылғанда) есеп бұзылмайды).
+  fontsDir: resolveFromRoot(process.env.FONTS_DIR ?? "server/assets/fonts"),
   // НАҚТЫ ӨНДІРІСТЕ ЕШҚАШАН ҚОСПАҢЫЗ — тек осы ортадағы fixture сынақтары үшін.
   allowLocalhostForTests: process.env.ALLOW_LOCALHOST_FOR_TESTS === "1",
   maxConcurrentJobs: Number(process.env.MAX_CONCURRENT_JOBS ?? 1),

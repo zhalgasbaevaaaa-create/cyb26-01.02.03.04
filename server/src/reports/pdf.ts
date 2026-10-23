@@ -6,8 +6,30 @@ import { CONFIG } from "../config.js";
 import { kz } from "@gha/shared";
 import type { EvaluationRecord } from "@gha/shared";
 
-const FONT_REG = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
-const FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
+// Алдымен репозиторийге салынған қаріптерді қолданамыз (Docker image-ге
+// тәуелсіз, әрдайым бар болады); ОС-тің жүйелік DejaVu қаріптері — қосымша
+// сақтық нұсқа ретінде қалдырылады (dev ортада орнатылған болса).
+const FONT_CANDIDATES_REG = [
+  path.join(CONFIG.fontsDir, "DejaVuSans.ttf"),
+  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+];
+const FONT_CANDIDATES_BOLD = [
+  path.join(CONFIG.fontsDir, "DejaVuSans-Bold.ttf"),
+  "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+];
+
+function findFont(candidates: string[]): string {
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  throw new Error(
+    `Қазақша Unicode қаріп файлы табылмады (ізделген жолдар: ${candidates.join(", ")}). ` +
+      `PDF есебі жасалмайды — server/assets/fonts/ ішінде DejaVuSans.ttf бар-жоғын тексеріңіз.`,
+  );
+}
+
+const FONT_REG = findFont(FONT_CANDIDATES_REG);
+const FONT_BOLD = findFont(FONT_CANDIDATES_BOLD);
 
 const STATUS_KK: Record<string, string> = {
   PASS: kz.test.PASS,
