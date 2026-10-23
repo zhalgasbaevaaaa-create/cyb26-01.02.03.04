@@ -6,7 +6,7 @@ services:
     name: game-hub-project-auditor
     env: docker
     dockerfilePath: ./Dockerfile
-    plan: starter
+    plan: free
     envVars:
       - key: ADMIN_TOKEN
         generateValue: true
